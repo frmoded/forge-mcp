@@ -1,0 +1,164 @@
+"""HTTP client that talks to forge-transpile for the catalog + vault reads.
+
+Both endpoints are currently missing on forge-transpile — the drain spec
+(CW-MCP-1-A §3, and my parent's investigation note) explicitly says to build
+the client to call `/catalog` and `/vault/notes` and surface the gap when
+they 404. See FEEDBACK §L47.
+
+Environment:
+  FORGE_TRANSPILE_URL — base URL. Default: http://localhost:8000.
+"""
+from __future__ import annotations
+
+import os
+
+import httpx
+
+from .schemas import NoteEntry, VaultNoteEntry
+
+_DEFAULT_BASE_URL = "http://localhost:8000"
+
+
+def _base_url() -> str:
+  return os.environ.get("FORGE_TRANSPILE_URL", _DEFAULT_BASE_URL).rstrip("/")
+
+
+class ForgeServiceError(Exception):
+  """Base class for forge-service client errors."""
+
+
+class ForgeServiceEndpointMissing(ForgeServiceError):
+  """Raised when a required forge-transpile endpoint returns 404.
+
+  Not a bug in the caller — a signal that forge-transpile hasn't shipped
+  the endpoint yet. The MCP tools translate this to a business-level
+  isError=true response so the agent gets an actionable message.
+  """
+
+  def __init__(self, endpoint: str, base_url: str) -> None:
+    self.endpoint = endpoint
+    self.base_url = base_url
+    super().__init__(
+      f"forge-transpile at {base_url} does not expose {endpoint}. "
+      f"See CW-MCP-1-A FEEDBACK §L47 — endpoint has not been implemented yet."
+    )
+
+
+class ForgeServiceHTTPError(ForgeServiceError):
+  """Raised when forge-transpile returns a non-2xx that isn't 404."""
+
+  def __init__(self, status_code: int, url: str, body: str) -> None:
+    self.status_code = status_code
+    self.url = url
+    self.body = body
+    super().__init__(
+      f"forge-transpile returned HTTP {status_code} for {url}: {body[:200]}"
+    )
+
+
+class ForgeServiceClient:
+  """Async client wrapping the forge-transpile REST surface we care about."""
+
+  def __init__(
+    self,
+    base_url: str | None = None,
+    client: httpx.AsyncClient | None = None,
+    timeout: float = 10.0,
+  ) -> None:
+    self._base_url = (base_url or _base_url()).rstrip("/")
+    self._client = client
+    self._timeout = timeout
+    self._owns_client = client is None
+
+  async def __aenter__(self) -> ForgeServiceClient:
+    if self._client is None:
+      self._client = httpx.AsyncClient(timeout=self._timeout)
+    return self
+
+  async def __aexit__(self, exc_type, exc, tb) -> None:
+    if self._owns_client and self._client is not None:
+      await self._client.aclose()
+      self._client = None
+
+  async def _client_or_ephemeral(self) -> httpx.AsyncClient:
+    if self._client is not None:
+      return self._client
+    # Ephemeral single-request client. Callers who care about pooling
+    # should use `async with ForgeServiceClient(...) as c:`.
+    return httpx.AsyncClient(timeout=self._timeout)
+
+  @staticmethod
+  def _headers(bearer: str) -> dict[str, str]:
+    return {
+      "Authorization": f"Bearer {bearer}",
+      "Accept": "application/json",
+    }
+
+  # ---------------------------------------------------------------------------
+  # /catalog
+  # ---------------------------------------------------------------------------
+
+  async def get_catalog(
+    self, domain: str | None, bearer: str
+  ) -> list[NoteEntry]:
+    """Fetch the library note catalog from forge-transpile.
+
+    # TODO(CW-MCP-1-A follow-up): forge-transpile does not yet expose
+    # /catalog; introspection lives in
+    # forge-transpile/engine_chip_introspector.py::introspect_engine_chips
+    # but isn't wired up as an HTTP endpoint. See FEEDBACK §L47.
+    """
+    url = f"{self._base_url}/catalog"
+    params: dict[str, str] = {}
+    if domain is not None:
+      params["domain"] = domain
+
+    client = await self._client_or_ephemeral()
+    try:
+      resp = await client.get(url, params=params, headers=self._headers(bearer))
+    finally:
+      if self._client is None:
+        await client.aclose()
+
+    if resp.status_code == 404:
+      raise ForgeServiceEndpointMissing("/catalog", self._base_url)
+    if resp.status_code >= 400:
+      raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
+
+    payload = resp.json()
+    # Expected shape: {"notes": [...]}. Be forgiving about extra keys.
+    raw_notes = payload.get("notes", []) if isinstance(payload, dict) else []
+    return [NoteEntry.model_validate(n) for n in raw_notes]
+
+  # ---------------------------------------------------------------------------
+  # /vault/notes
+  # ---------------------------------------------------------------------------
+
+  async def list_vault_notes(
+    self, filter: str | None, bearer: str
+  ) -> list[VaultNoteEntry]:
+    """Fetch the vault note list from forge-transpile.
+
+    # TODO(CW-MCP-1-A follow-up): forge-transpile does not yet expose
+    # /vault/notes. See FEEDBACK §L47.
+    """
+    url = f"{self._base_url}/vault/notes"
+    params: dict[str, str] = {}
+    if filter is not None:
+      params["filter"] = filter
+
+    client = await self._client_or_ephemeral()
+    try:
+      resp = await client.get(url, params=params, headers=self._headers(bearer))
+    finally:
+      if self._client is None:
+        await client.aclose()
+
+    if resp.status_code == 404:
+      raise ForgeServiceEndpointMissing("/vault/notes", self._base_url)
+    if resp.status_code >= 400:
+      raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
+
+    payload = resp.json()
+    raw_notes = payload.get("notes", []) if isinstance(payload, dict) else []
+    return [VaultNoteEntry.model_validate(n) for n in raw_notes]

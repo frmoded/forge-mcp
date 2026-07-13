@@ -1,0 +1,43 @@
+# systemd unit for forge-mcp.
+#
+# Install:
+#   sudo cp deploy/mcp-forge.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now mcp-forge.service
+#
+# Logs: `journalctl -u mcp-forge -f`
+#
+# CW-MCP-1-B: FORGE_MCP_BEARER is a dev fallback only — per-request
+# Bearer arrives on the client's Authorization header. Do NOT set it
+# here in production.
+
+[Unit]
+Description=forge-mcp — MCP server exposing Forge E-- library notes + vault
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=forgemcp
+Group=forgemcp
+WorkingDirectory=/opt/forge-mcp
+
+# Runtime config. Adjust FORGE_TRANSPILE_URL to your hosted forge-transpile.
+Environment=FORGE_MCP_HOST=127.0.0.1
+Environment=FORGE_MCP_PORT=8765
+Environment=FORGE_TRANSPILE_URL=https://forge.thecodingarena.com
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/forge-mcp/venv/bin/python -m forge_mcp.server
+Restart=on-failure
+RestartSec=3s
+
+# Hardening.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=
+
+[Install]
+WantedBy=multi-user.target
