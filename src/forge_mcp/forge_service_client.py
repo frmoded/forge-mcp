@@ -125,9 +125,20 @@ class ForgeServiceClient:
     if resp.status_code >= 400:
       raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
 
+    # Drain 2670 — forge-transpile's /catalog currently returns a bare
+    # JSON array (`response_model=list[NoteEntry]` per drain 1330's
+    # main.py). CW-MCP-1-A originally assumed a wrapped `{"notes": [...]}`
+    # shape and silently dropped the payload when the wire didn't
+    # match, surfacing as "No notes found" isError: true. Accept EITHER
+    # shape so a future migration to a wrapped envelope also works
+    # without another client change.
     payload = resp.json()
-    # Expected shape: {"notes": [...]}. Be forgiving about extra keys.
-    raw_notes = payload.get("notes", []) if isinstance(payload, dict) else []
+    if isinstance(payload, list):
+      raw_notes = payload
+    elif isinstance(payload, dict):
+      raw_notes = payload.get("notes", [])
+    else:
+      raw_notes = []
     return [NoteEntry.model_validate(n) for n in raw_notes]
 
   # ---------------------------------------------------------------------------
@@ -159,6 +170,14 @@ class ForgeServiceClient:
     if resp.status_code >= 400:
       raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
 
+    # Drain 2670 — /vault/notes isn't shipped yet, but apply the same
+    # shape-tolerance the /catalog fix landed so we're forward-safe
+    # against whichever wire shape forge-transpile picks.
     payload = resp.json()
-    raw_notes = payload.get("notes", []) if isinstance(payload, dict) else []
+    if isinstance(payload, list):
+      raw_notes = payload
+    elif isinstance(payload, dict):
+      raw_notes = payload.get("notes", [])
+    else:
+      raw_notes = []
     return [VaultNoteEntry.model_validate(n) for n in raw_notes]

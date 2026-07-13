@@ -101,3 +101,64 @@ async def test_list_vault_notes_raises_endpoint_missing_on_404() -> None:
       with pytest.raises(ForgeServiceEndpointMissing) as exc:
         await client.list_vault_notes(filter=None, bearer="tok")
     assert "/vault/notes" in str(exc.value)
+
+
+# -----------------------------------------------------------------------------
+# Drain 2670 — response-shape tolerance.
+#
+# forge-transpile's `/catalog` returns a bare JSON array
+# (`response_model=list[NoteEntry]` per drain 1330). CW-MCP-1-A's parser
+# assumed a `{"notes": [...]}` wrapper and silently dropped payloads on
+# the wire mismatch, surfacing to agents as "No notes found" isError: true.
+# The fix widens the client to accept EITHER shape; tests below regression-
+# lock both.
+# -----------------------------------------------------------------------------
+
+
+_BARE_ARRAY_ENTRY = {
+  "name": "voices_canonical",
+  "domain": "music",
+  "signature": "Call [[voices_canonical]] with kp, chp",
+  "short_desc": "compose canonical voice layout",
+  "long_desc": "long",
+  "uri": "forge-note:///music/voices_canonical",
+}
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_accepts_bare_array_shape() -> None:
+  # Current forge-transpile /catalog wire shape.
+  async with respx.mock(base_url="http://localhost:8000") as mock:
+    mock.get("/catalog").mock(
+      return_value=httpx.Response(200, json=[_BARE_ARRAY_ENTRY])
+    )
+    async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+      notes = await client.get_catalog(domain=None, bearer="tok")
+    assert len(notes) == 1
+    assert notes[0].name == "voices_canonical"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_accepts_wrapped_notes_shape() -> None:
+  # Future-safe: if forge-transpile ever moves to a wrapped envelope,
+  # this test ensures we still parse it.
+  async with respx.mock(base_url="http://localhost:8000") as mock:
+    mock.get("/catalog").mock(
+      return_value=httpx.Response(200, json={"notes": [_BARE_ARRAY_ENTRY]})
+    )
+    async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+      notes = await client.get_catalog(domain=None, bearer="tok")
+    assert len(notes) == 1
+    assert notes[0].name == "voices_canonical"
+
+
+@pytest.mark.asyncio
+async def test_get_catalog_returns_empty_on_unexpected_shape() -> None:
+  # Defensive: if forge-transpile ever returns garbage, don't crash.
+  async with respx.mock(base_url="http://localhost:8000") as mock:
+    mock.get("/catalog").mock(
+      return_value=httpx.Response(200, json="unexpected-string-payload")
+    )
+    async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+      notes = await client.get_catalog(domain=None, bearer="tok")
+    assert notes == []
