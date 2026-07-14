@@ -1,12 +1,25 @@
 [project]
 name = "forge-mcp"
 version = "0.1.0"
-description = "forge-MCP: read-only surface of the Forge E-- library note catalog + vault, exposed as an MCP server."
+description = "MCP server for the Forge E-- library note catalog + Recipe authoring loop (compile / run / commit)."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "Apache-2.0" }
 authors = [
-  { name = "Oded Fuhrmann" },
+  { name = "Oded Fuhrmann", email = "frmoded@gmail.com" },
+]
+keywords = ["mcp", "model-context-protocol", "forge", "e--", "recipe", "music", "generative", "anthropic", "claude"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: Apache Software License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Topic :: Multimedia :: Sound/Audio :: Composition",
+  "Topic :: Software Development :: Libraries",
 ]
 dependencies = [
   "mcp>=1.0",
@@ -21,7 +34,15 @@ dev = [
   "respx>=0.21",
   "mypy>=1.10",
   "ruff>=0.5",
+  "jsonschema>=4",  # tests/test_output_schemas_audit.py (drain CW-MCP-3-A)
+  "build>=1.0",  # `python -m build` for wheel/sdist
 ]
+
+[project.urls]
+Homepage = "https://github.com/frmoded/forge-mcp"
+Repository = "https://github.com/frmoded/forge-mcp"
+Documentation = "https://github.com/frmoded/forge-mcp/blob/main/docs/install.md"
+Issues = "https://github.com/frmoded/forge-mcp/issues"
 
 [project.scripts]
 forge-mcp = "forge_mcp.server:main"

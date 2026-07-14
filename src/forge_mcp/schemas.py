@@ -72,31 +72,33 @@ VaultSourceFacet = Literal["description", "recipe", "python", "synced"]
 
 
 class VaultNoteEntry(BaseModel):
-  """A single vault note (user-authored candidate/committed material)."""
+  """A single vault note (user-authored candidate/committed material).
+
+  Drain CW-MCP-2-E — reshaped from the Sprint 1 speculative shape
+  (`state`, `source_facet`, `latest_recipe_version`) to the fields the
+  local `VaultFS.list_notes` walker can actually populate from note
+  frontmatter + facet-presence detection. The dropped fields were
+  never populated (the endpoint they proxied to never existed on
+  forge-transpile). Richer per-note metadata is a future
+  `forge_describe_note` polish drain.
+  """
 
   model_config = ConfigDict(extra="forbid")
 
-  note_id: str = Field(..., description="Stable vault-scoped id for the note.")
-  name: str = Field(..., description="Human-readable note name.")
+  note_id: str = Field(..., description="Stable vault-scoped id for the note (path minus `.md`).")
+  name: str = Field(..., description="Human-readable note name (filename stem).")
   path: str = Field(..., description="Vault-relative path to the note file.")
-  state: str = Field(
+  has_recipe: bool = Field(
     ...,
-    description=(
-      "Vault-native state label. Left open (any string) until Sprint 2 "
-      "picks a concrete shape; see drain 1335 FEEDBACK §Fallback."
-    ),
+    description="True iff the note has a `# Recipe` (or legacy `# E--`) facet section.",
   )
-  source_facet: VaultSourceFacet = Field(
-    ...,
-    description=(
-      "Which facet currently holds the compilable source per Forge "
-      "constitution §S9: description | recipe | python | synced."
-    ),
-  )
-  latest_recipe_version: int = Field(
-    ...,
+  recipe_version: int | None = Field(
+    None,
     ge=0,
-    description="Highest committed Recipe version on the note; 0 if never committed.",
+    description=(
+      "The note's `recipe_version` frontmatter stamp; None when the "
+      "stamp is absent (never committed via forge_commit_recipe)."
+    ),
   )
 
 

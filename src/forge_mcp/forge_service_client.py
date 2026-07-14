@@ -14,7 +14,7 @@ import os
 
 import httpx
 
-from .schemas import CompileResult, GetRunResult, NoteEntry, RunResult, VaultNoteEntry
+from .schemas import CompileResult, GetRunResult, NoteEntry, RunResult
 
 _DEFAULT_BASE_URL = "http://localhost:8000"
 
@@ -141,46 +141,11 @@ class ForgeServiceClient:
       raw_notes = []
     return [NoteEntry.model_validate(n) for n in raw_notes]
 
-  # ---------------------------------------------------------------------------
-  # /vault/notes
-  # ---------------------------------------------------------------------------
-
-  async def list_vault_notes(
-    self, filter: str | None, bearer: str
-  ) -> list[VaultNoteEntry]:
-    """Fetch the vault note list from forge-transpile.
-
-    # TODO(CW-MCP-1-A follow-up): forge-transpile does not yet expose
-    # /vault/notes. See FEEDBACK §L47.
-    """
-    url = f"{self._base_url}/vault/notes"
-    params: dict[str, str] = {}
-    if filter is not None:
-      params["filter"] = filter
-
-    client = await self._client_or_ephemeral()
-    try:
-      resp = await client.get(url, params=params, headers=self._headers(bearer))
-    finally:
-      if self._client is None:
-        await client.aclose()
-
-    if resp.status_code == 404:
-      raise ForgeServiceEndpointMissing("/vault/notes", self._base_url)
-    if resp.status_code >= 400:
-      raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
-
-    # Drain 2670 — /vault/notes isn't shipped yet, but apply the same
-    # shape-tolerance the /catalog fix landed so we're forward-safe
-    # against whichever wire shape forge-transpile picks.
-    payload = resp.json()
-    if isinstance(payload, list):
-      raw_notes = payload
-    elif isinstance(payload, dict):
-      raw_notes = payload.get("notes", [])
-    else:
-      raw_notes = []
-    return [VaultNoteEntry.model_validate(n) for n in raw_notes]
+  # /vault/notes was RETIRED in CW-MCP-2-E — forge-transpile never
+  # implemented the endpoint, and forge-mcp's `forge_read_notes_in_vault`
+  # tool now reads locally via VaultFS (same architecture as
+  # forge_commit_recipe in CW-MCP-2-C). If you're looking for that
+  # code path, see `~/projects/forge-mcp/src/forge_mcp/vault_fs.py::list_notes`.
 
   # ---------------------------------------------------------------------------
   # /compile — CW-MCP-2-A

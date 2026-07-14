@@ -1,21 +1,19 @@
 # forge-mcp
 
-**forge-MCP exposes the Forge E-- library note catalog and vault as an
-MCP server, so any MCP-consuming agent (Claude Desktop, Cursor, …) can
-enumerate the catalog and read library notes by URI.** This repo ships
-Sprint 1 (read-only surface): the two catalog/vault tools and the
-`forge-note:///` resource scheme. Compile / run / commit tools land in
-Sprint 2.
+**Author, compile, run, and commit generative-music E-- Recipes directly from any MCP-capable agent (Claude Desktop, Cursor, …).** forge-mcp exposes the Forge E-- library note catalog + vault as an MCP server and closes the authoring loop end-to-end: the agent picks a chip from the catalog, drafts a Recipe, verifies it parses, runs it in a sandbox, previews the artifact, and commits the finished Recipe to a vault note. All 6 tools ship today.
+
+```
+[library note catalog] → [compile] → [run] → [commit] → [vault note with recipe_version bump]
+```
 
 ## Install
 
-**Full walkthrough with Docker + systemd + nginx TLS**:
-[docs/install.md](docs/install.md).
+Full walkthrough (Claude Desktop config, forge-transpile Bearer acquisition, verification smoke, troubleshooting): [docs/install.md](docs/install.md).
 
 Quick paths:
 
 ```bash
-# Local dev (pip)
+# From source (pip + editable install for development)
 pip install -e ".[dev]"
 python -m forge_mcp.server
 
@@ -23,44 +21,27 @@ python -m forge_mcp.server
 docker build -t forge-mcp:latest .
 docker run --rm -p 8765:8765 \
     -e FORGE_TRANSPILE_URL=https://forge.thecodingarena.com \
+    -e FORGE_VAULT_PATH=/path/to/your/vault \
     forge-mcp:latest
 ```
 
 Environment:
 
-- `FORGE_TRANSPILE_URL` — base URL of the forge-transpile service.
-  Default: `http://localhost:8000`.
+- `FORGE_TRANSPILE_URL` — base URL of the forge-transpile service. Default: `http://localhost:8000`.
+- `FORGE_VAULT_PATH` — local vault directory for `forge_read_notes_in_vault` + `forge_commit_recipe`. Default: `~/forge-vaults/bluh`.
 - `FORGE_MCP_HOST` — host to bind. Default: `0.0.0.0`.
 - `FORGE_MCP_PORT` — port to bind. Default: `8765`.
-- `FORGE_MCP_BEARER` — **dev fallback only**. Per-request Bearer
-  extraction is the primary path (CW-MCP-1-B); this env var only
-  fires when the incoming request has no `Authorization` header.
-  Do NOT set in production.
-
-## Auth
-
-forge-mcp does NOT validate tokens itself — forge-transpile is the
-source of truth (guarded by `FORGE_TRANSPILE_SECRET`). Each request's
-`Authorization: Bearer <token>` header is forwarded verbatim; a 401 or
-403 from forge-transpile surfaces as `isError: true` with an actionable
-message the agent can read.
-
-Rotation is zero-downtime on the forge-mcp side: change
-`FORGE_TRANSPILE_SECRET` on forge-transpile, update your MCP client's
-header, done. Old tokens fail on the next request with a clean
-rejection message.
+- `FORGE_MCP_BEARER` — **dev fallback only**. Per-request Bearer extraction is the primary path (CW-MCP-1-B); this env var only fires when the incoming request has no `Authorization` header. Do NOT set in production.
 
 ## Claude Desktop config
 
-Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
-(hosted example — self-host swaps the URL for
-`http://localhost:8765/mcp`):
+Add to `~/Library/Application Support/Claude/claude_desktop_config.json`:
 
 ```json
 {
   "mcpServers": {
     "forge-mcp": {
-      "url": "https://mcp.forge.example/mcp",
+      "url": "http://localhost:8765/mcp",
       "headers": {
         "Authorization": "Bearer <your-forge-transpile-token>"
       }
@@ -69,7 +50,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json`
 }
 ```
 
-Grab your token with:
+Get your Bearer:
 
 ```bash
 jq -r '.transpileServiceToken' \
@@ -78,29 +59,35 @@ jq -r '.transpileServiceToken' \
 
 ## Tools
 
-Sprint 1 (read-only surface):
+**Read** (no side effects):
 
-- `forge_read_note_catalog({domain?})` — list library notes.
-- `forge_read_notes_in_vault({filter?})` — list vault notes.
+- `forge_read_note_catalog({domain?})` — list Forge library notes; every entry carries the E-- signature the agent needs to `Call` it.
+- `forge_read_notes_in_vault({filter?})` — list vault notes with a `has_recipe` + `recipe_version` summary. Backed by a local filesystem walk (CW-MCP-2-E).
 
-Sprint 2 (authoring loop):
+**Author** (deterministic — no LLM, no vault write):
 
-- `forge_compile_recipe({source})` — deterministic Recipe → Python. No LLM,
-  no execution. Returns compiled source + unresolved slot count OR a
-  structured parse error with line/column.
-- `forge_run_recipe({source})` — compile + execute in a resource-limited
-  server sandbox. Returns a `run_id` + short preview; artifacts (MusicXML,
-  MIDI, PNGs) accessible via the `forge-artifact://` resource.
-- `forge_get_run_result({run_id})` — fetch the full stdout/stderr +
-  artifact manifest of a previous run. 7-day TTL, per-Bearer isolation.
+- `forge_compile_recipe({source})` — Recipe → Python. Returns compiled source + unresolved slot count, OR a structured parse error with line/column (per drain CW-recipe-parser-line-info).
+- `forge_run_recipe({source, domains?})` — compile + execute in a resource-limited server sandbox. Returns a short preview + a `run_id`; artifacts (MusicXML / MIDI / PNGs) accessible via the `forge-artifact://` resource.
+- `forge_get_run_result({run_id})` — fetch full stdout/stderr + artifact manifest of a previous run. 7-day TTL, per-Bearer isolation.
+
+**Commit**:
+
+- `forge_commit_recipe({source, note_id, expected_version?})` — persist Recipe to a vault note (facet-scoped — Description + Python + frontmatter survive byte-for-byte). Bumps `recipe_version` in the note's frontmatter. Optimistic-concurrency via `expected_version`; version-conflict returns `isError:true` with expected + current numbers.
 
 ## Resources
 
-- `forge-note:///{domain}/{name}` — library note (Sprint 1).
-- `forge-artifact:///{run_id}/{artifact_name}` — on-demand binary fetch
-  for run artifacts (Sprint 2). Text mimes return via `text`; binaries
-  via base64 `blob`.
+- `forge-note:///{domain}/{name}` — library note content.
+- `forge-artifact:///{run_id}/{artifact_name}` — on-demand binary fetch for run artifacts. Text mimes return via `text`; binaries via base64 `blob`.
+- `forge-recipe:///{note_id}/v{n}` — Recipe body at a specific `recipe_version` (git-tracked vaults only; returns "history unavailable" text otherwise).
 
-## Landing page
+## Auth
 
-Full user-facing docs will live at `TBD` (see CW-MCP-3-B).
+forge-mcp does NOT validate tokens itself — forge-transpile is the source of truth (guarded by `FORGE_TRANSPILE_SECRET`). Each request's `Authorization: Bearer <token>` header is forwarded verbatim; a 401 or 403 from forge-transpile surfaces as `isError: true` with an actionable message the agent can read (drain CW-MCP-1-B).
+
+Rotation is zero-downtime on the forge-mcp side: change `FORGE_TRANSPILE_SECRET` on forge-transpile, update your MCP client's header, done. Old tokens fail on the next request with a clean rejection message.
+
+## Related repos
+
+- **[forge](https://github.com/frmoded/forge)** — the E-- parser + transpiler + core music library. forge-mcp vendors a snapshot of `forge/recipe/` per the CW-MCP-2-A architecture; drift is caught by `scripts/check-recipe-drift.sh` in the forge-transpile repo.
+- **[forge-transpile](https://github.com/frmoded/forge-transpile)** — the FastAPI service exposing `/compile` / `/run` / `/catalog` etc. that forge-mcp's tools proxy for the transpile + sandboxed-run paths. Vault reads + commits are LOCAL and don't hit forge-transpile.
+- **forge-client-obsidian** — the Obsidian plugin end of the same authoring loop. forge-mcp writes to the SAME vault the plugin reads/renders; both share the note-file format.

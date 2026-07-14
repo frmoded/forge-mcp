@@ -27,7 +27,14 @@ INPUT_SCHEMA: dict[str, Any] = {
 
 OUTPUT_SCHEMA: dict[str, Any] = {
   "type": "object",
-  "required": ["run_id"],
+  # Drain CW-MCP-3-A — tightened to match `GetRunResult` Pydantic model
+  # (schemas.py). Every field is populated on success; declaring them as
+  # required lets MCP clients rely on presence without null-guarding
+  # each read.
+  "required": [
+    "run_id", "created_at", "expires_at", "duration_ms",
+    "exit_code", "timed_out", "stdout", "stderr", "artifacts",
+  ],
   "properties": {
     "run_id": {"type": "string"},
     "created_at": {"type": "integer"},
@@ -37,7 +44,19 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "timed_out": {"type": "boolean"},
     "stdout": {"type": "string"},
     "stderr": {"type": "string"},
-    "artifacts": {"type": "array"},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "mime_type", "size_bytes", "uri"],
+        "properties": {
+          "name": {"type": "string"},
+          "mime_type": {"type": "string"},
+          "size_bytes": {"type": "integer", "minimum": 0},
+          "uri": {"type": "string"},
+        },
+      },
+    },
   },
 }
 

@@ -21,15 +21,21 @@ def test_catalog_output_schema_lists_every_note_field_as_required() -> None:
 
 
 def test_vault_output_schema_lists_every_note_field_as_required() -> None:
+  """Drain CW-MCP-2-E — reshaped from the Sprint 1 speculative fields
+  (state/source_facet/latest_recipe_version) to the actual-populated
+  fields the local VaultFS walker returns. `recipe_version` stays
+  optional at the JSON-schema level (nullable) since notes never
+  committed via forge_commit_recipe don't have the stamp."""
   item_schema = read_notes_in_vault.OUTPUT_SCHEMA["properties"]["notes"]["items"]
   assert set(item_schema["required"]) == {
     "note_id",
     "name",
     "path",
-    "state",
-    "source_facet",
-    "latest_recipe_version",
+    "has_recipe",
   }
+  # recipe_version is present as a nullable property but not required.
+  assert "recipe_version" in item_schema["properties"]
+  assert item_schema["properties"]["recipe_version"]["type"] == ["integer", "null"]
 
 
 def test_note_entry_roundtrips_through_pydantic() -> None:

@@ -93,14 +93,11 @@ async def test_get_catalog_forwards_bearer_token_in_header() -> None:
   assert captured_headers.get("authorization") == "Bearer my-token-123"
 
 
-@pytest.mark.asyncio
-async def test_list_vault_notes_raises_endpoint_missing_on_404() -> None:
-  async with respx.mock(base_url="http://localhost:8000") as mock:
-    mock.get("/vault/notes").mock(return_value=httpx.Response(404))
-    async with ForgeServiceClient(base_url="http://localhost:8000") as client:
-      with pytest.raises(ForgeServiceEndpointMissing) as exc:
-        await client.list_vault_notes(filter=None, bearer="tok")
-    assert "/vault/notes" in str(exc.value)
+# `list_vault_notes` was retired in CW-MCP-2-E — the forge-mcp tool
+# `forge_read_notes_in_vault` now reads locally via VaultFS (drain
+# 2026-07-14-1620). The pre-drain endpoint-missing regression test
+# was removed with the client method; the local read path is covered
+# by tests/test_read_vault_tool.py.
 
 
 # -----------------------------------------------------------------------------

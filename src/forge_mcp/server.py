@@ -222,6 +222,10 @@ def _make_server(
     result = await get_run_result.run(arguments={"run_id": run_id}, bearer=bearer)
     return _to_call_tool_result(result)
 
+  # Drain CW-MCP-2-E — LOCAL VaultFS-backed handler (no forge-transpile
+  # HTTP roundtrip). Bearer still extracted so mis-configured clients
+  # fail loudly at the same layer as every other tool; not threaded
+  # downstream because the local read has no upstream service to hit.
   @server.tool(
     name=read_notes_in_vault.TOOL_NAME,
     description=read_notes_in_vault.DESCRIPTION,

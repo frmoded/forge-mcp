@@ -227,19 +227,23 @@ async def test_get_run_result_wire_shape_no_double_wrap(server):
 
 
 @pytest.mark.asyncio
-async def test_read_notes_in_vault_wire_shape_no_double_wrap(server):
-  """Drain §5 test #5 — read_notes_in_vault returns flat structuredContent."""
+async def test_read_notes_in_vault_wire_shape_no_double_wrap(server, tmp_path, monkeypatch):
+  """Drain §5 test #5 — read_notes_in_vault returns flat structuredContent.
+
+  Post-CW-MCP-2-E this tool reads locally, not via HTTP — point
+  FORGE_VAULT_PATH at an empty tmp dir so the walker finds nothing
+  (an empty-notes result is still success)."""
+  vault = tmp_path / "wire-shape-vault"
+  vault.mkdir()
+  monkeypatch.setenv("FORGE_VAULT_PATH", str(vault))
   tool = _tool(server, "forge_read_notes_in_vault")
-  async with respx.mock(base_url="http://localhost:8000") as mock:
-    mock.get("/vault/notes").mock(
-      return_value=httpx.Response(200, json={"notes": []})
-    )
-    result = await tool.run(
-      arguments={},
-      context=_FakeCtx(),
-      convert_result=True,
-    )
+  result = await tool.run(
+    arguments={},
+    context=_FakeCtx(),
+    convert_result=True,
+  )
   assert isinstance(result, CallToolResult)
   assert result.structuredContent is not None
   assert "notes" in result.structuredContent
   assert "structuredContent" not in result.structuredContent
+  assert result.structuredContent["notes"] == []

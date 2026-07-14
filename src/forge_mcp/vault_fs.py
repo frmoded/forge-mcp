@@ -454,6 +454,76 @@ class VaultFS:
 
     return new_version, git_sha
 
+  # -- Listing (for forge_read_notes_in_vault) ------------------------------
+
+  def list_notes(self, filter: str | None = None) -> list[dict]:
+    """Walk the vault dir + return a list-of-dicts summary of every
+    `.md` note. Result is sorted by `note_id`.
+
+    Drain CW-MCP-2-E — replaces the Sprint 1 HTTP proxy that pointed at
+    a non-existent `/vault/notes` endpoint on forge-transpile. Reads
+    from the same vault that `commit_recipe` writes to → symmetric
+    surface.
+
+    Filter is a plain substring match on `note_id` (case-sensitive).
+    None returns all notes.
+
+    Skips any path segment starting with `.` (`.obsidian/`, `.trash/`,
+    `.git/`, etc.) — these are editor / vcs internals, not agent-
+    writable content.
+
+    Each dict has:
+      * `note_id`: path relative to vault root, minus `.md` extension.
+      * `name`: bare filename stem.
+      * `path`: full vault-relative path including `.md`.
+      * `has_recipe`: True iff the note has a `# Recipe` (or legacy
+        `# E--`) facet section.
+      * `recipe_version`: the `recipe_version` frontmatter stamp as
+        an int, OR None when the stamp is absent (never committed via
+        forge_commit_recipe).
+
+    Notes that aren't parseable as V2a (random prose, corrupt YAML,
+    etc.) are still included with `has_recipe=False, recipe_version=None`
+    — one bad note shouldn't break the whole listing.
+    """
+    entries: list[dict] = []
+    for path in self.root.rglob("*.md"):
+      try:
+        rel = path.relative_to(self.root)
+      except ValueError:
+        # Symlink escape — skip.
+        continue
+      if any(part.startswith(".") for part in rel.parts):
+        continue
+      note_id = str(rel.with_suffix(""))
+      if filter is not None and filter not in note_id:
+        continue
+      has_recipe = False
+      recipe_version: int | None = None
+      try:
+        raw = path.read_text(encoding="utf-8")
+        parsed = parse_note(raw)
+        has_recipe = parsed.has_recipe_facet
+        stamp = parsed.frontmatter_dict.get("recipe_version")
+        if stamp is not None:
+          try:
+            recipe_version = int(stamp)
+          except ValueError:
+            recipe_version = None
+      except (OSError, UnicodeDecodeError):
+        # Unreadable file (permission, binary content mislabeled as
+        # .md) — surface as unparseable, don't fail the listing.
+        pass
+      entries.append({
+        "note_id": note_id,
+        "name": rel.stem,
+        "path": str(rel),
+        "has_recipe": has_recipe,
+        "recipe_version": recipe_version,
+      })
+    entries.sort(key=lambda e: e["note_id"])
+    return entries
+
   # -- Versioned Recipe fetch (for the forge-recipe:/// resource) -----------
 
   def read_recipe_version(self, note_id: str, version: int) -> str | None:

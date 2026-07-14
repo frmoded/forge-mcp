@@ -1,9 +1,47 @@
 # forge-mcp — install + configure
 
-Two paths: hosted (`mcp.forge.example`) or self-hosted (Docker + your own
-domain, or bare-metal via the systemd unit). Both surface the same
-Streamable HTTP transport; only the endpoint URL + your Bearer token
-change.
+Three paths, in order of Sprint 3 maturity:
+
+- **Path 0 — PyPI + Claude Desktop** (RECOMMENDED): `pip install forge-mcp`, add a Claude Desktop stanza. Local Streamable HTTP transport. This is the flow the MCP Registry listing points at (drain CW-MCP-3-B).
+- **Path A — hosted `mcp.forge.example`** (Sprint 3+ hardening): remote Streamable HTTP; not shipped for launch (see [landing-copy.md](../landing-copy.md) "What it explicitly does NOT do").
+- **Path B — self-hosted Docker + nginx + systemd**: for cohort members who want to run the same shape as production locally.
+
+## Path 0 — PyPI install (fastest)
+
+```bash
+pip install forge-mcp
+```
+
+Configure Claude Desktop by adding to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
+
+```json
+{
+  "mcpServers": {
+    "forge-mcp": {
+      "command": "forge-mcp",
+      "env": {
+        "FORGE_TRANSPILE_URL": "https://forge.thecodingarena.com",
+        "FORGE_VAULT_PATH": "~/forge-vaults/bluh",
+        "FORGE_MCP_BEARER": "<paste-your-token>"
+      }
+    }
+  }
+}
+```
+
+Verify (restart Claude Desktop, open a chat, ask):
+
+> "List the music library notes available via forge-mcp."
+
+Expected: Claude calls `forge_read_note_catalog(domain="music")` and shows ~35 chip names.
+
+### Troubleshooting Path 0
+
+- **"No tools available" in Claude Desktop**: check the client log (`~/Library/Logs/Claude/mcp*.log` on macOS). Most common cause: `forge-mcp` command not on PATH — try `command: /full/path/to/forge-mcp` in the config.
+- **"forge-transpile rejected the Bearer token (HTTP 401 ...)"**: the token in your config is stale. Refresh via `jq -r '.transpileServiceToken' ~/forge-vaults/bluh/.obsidian/plugins/forge-client-obsidian/data.json` and re-paste.
+- **`forge_commit_recipe` returns "Vault filesystem unavailable"**: check `FORGE_VAULT_PATH` exists + is a directory. Default is `~/forge-vaults/bluh`.
+- **`forge_read_note_catalog` returns `"No notes found for domain 'music'"`**: forge-transpile is up but /catalog is empty — the deployed service is missing engine chips. Fixed on the forge-transpile side; ping @driver.
+- **Structured content nesting looks weird (`.structuredContent.structuredContent.notes`)**: you're on a pre-CW-MCP-fastmcp-doublewrap build. Upgrade to forge-mcp >= 0.1.0.
 
 ## Prerequisites
 

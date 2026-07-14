@@ -40,7 +40,12 @@ INPUT_SCHEMA: dict[str, Any] = {
 
 OUTPUT_SCHEMA: dict[str, Any] = {
   "type": "object",
-  "required": ["parse_status"],
+  # Drain CW-MCP-3-A — every field except `parse_error` is populated
+  # even on parse-error runs (run_id/duration/exit are 0/"" but present).
+  "required": [
+    "parse_status", "run_id", "duration_ms", "exit_code",
+    "timed_out", "stdout_preview", "artifacts",
+  ],
   "properties": {
     "parse_status": {"type": "string", "enum": ["ok", "parse_error"]},
     "run_id": {"type": "string"},
@@ -48,7 +53,19 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "exit_code": {"type": "integer"},
     "timed_out": {"type": "boolean"},
     "stdout_preview": {"type": "string"},
-    "artifacts": {"type": "array"},
+    "artifacts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["name", "mime_type", "size_bytes", "uri"],
+        "properties": {
+          "name": {"type": "string"},
+          "mime_type": {"type": "string"},
+          "size_bytes": {"type": "integer", "minimum": 0},
+          "uri": {"type": "string"},
+        },
+      },
+    },
     "parse_error": {"type": ["object", "null"]},
   },
 }
