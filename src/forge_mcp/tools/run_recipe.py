@@ -25,7 +25,16 @@ INPUT_SCHEMA: dict[str, Any] = {
     "source": {
       "type": "string",
       "description": "E-- Recipe source text. Compiled + executed server-side in a resource-limited sandbox.",
-    }
+    },
+    "domains": {
+      "type": "array",
+      "items": {"type": "string"},
+      "default": ["music"],
+      "description": (
+        "Library-note domains to bind into the sandbox namespace "
+        "(e.g. ['music'], ['moda']). Defaults to ['music'] when omitted."
+      ),
+    },
   },
 }
 
@@ -100,6 +109,14 @@ async def run(
       "structuredContent": {"parse_status": "parse_error", "run_id": ""},
       "isError": True,
     }
+  # Drain 2900 — domains selects which library-note callables get bound.
+  # Default to ["music"] to match forge-transpile's server-side default,
+  # but pass it explicitly so the outbound HTTP body names the domain.
+  raw_domains = arguments.get("domains", ["music"])
+  if isinstance(raw_domains, list) and all(isinstance(d, str) for d in raw_domains):
+    domains = raw_domains
+  else:
+    domains = ["music"]
 
   owns_client = client is None
   if client is None:
@@ -108,7 +125,9 @@ async def run(
 
   try:
     try:
-      result: RunResult = await client.run_recipe(source=source, bearer=bearer)
+      result: RunResult = await client.run_recipe(
+        source=source, bearer=bearer, domains=domains,
+      )
     except ForgeServiceEndpointMissing as exc:
       return {
         "content": [

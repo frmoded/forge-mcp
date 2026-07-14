@@ -129,3 +129,47 @@ async def test_run_recipe_timeout_surfaces_as_isError() -> None:
     )
   assert result["isError"] is True
   assert "TIMED OUT" in result["content"][0]["text"]
+
+
+# ---------------------------------------------------------------------------
+# Drain 2900 — domains field wiring
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_recipe_forwards_domains_field() -> None:
+  """Explicit `domains: ["moda"]` lands on the outbound httpx request body."""
+  import json as _json
+
+  route = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await run_recipe.run(
+      arguments={"source": _TRIVIAL, "domains": ["moda"]},
+      bearer="tok", client=client,
+    )
+  assert route.called
+  sent = _json.loads(route.calls.last.request.content)
+  assert sent["domains"] == ["moda"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_recipe_defaults_domains_to_music() -> None:
+  """Omitting `domains` sends `["music"]` explicitly on the wire so
+  forge-transpile's default matches forge-mcp's default at every layer."""
+  import json as _json
+
+  route = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await run_recipe.run(
+      arguments={"source": _TRIVIAL},
+      bearer="tok", client=client,
+    )
+  assert route.called
+  sent = _json.loads(route.calls.last.request.content)
+  assert sent["domains"] == ["music"]

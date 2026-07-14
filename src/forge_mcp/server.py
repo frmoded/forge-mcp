@@ -150,12 +150,16 @@ def _make_server(
   async def _forge_run_recipe(
     ctx: Context,
     source: str,
+    domains: list[str] | None = None,
   ) -> dict[str, Any]:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
       return auth_error_to_tool_result(exc)
-    return await run_recipe.run(arguments={"source": source}, bearer=bearer)
+    args: dict[str, Any] = {"source": source}
+    if domains is not None:
+      args["domains"] = domains
+    return await run_recipe.run(arguments=args, bearer=bearer)
 
   @server.tool(
     name=get_run_result.TOOL_NAME,

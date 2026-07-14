@@ -218,19 +218,28 @@ class ForgeServiceClient:
   # /run + /run/{id}[/artifact/{name}] — CW-MCP-2-B
   # ---------------------------------------------------------------------------
 
-  async def run_recipe(self, source: str, bearer: str) -> RunResult:
+  async def run_recipe(
+    self, source: str, bearer: str, domains: list[str] | None = None,
+  ) -> RunResult:
     """Compile + execute an E-- Recipe in forge-transpile's sandbox.
 
     HTTP 200 for BOTH parse errors AND execution failures — the
     `parse_status` field discriminates. Only auth (401/403) and
     malformed bodies (422) raise here.
+
+    `domains` (drain 2900) selects which library-note callables get
+    bound into the sandbox namespace. Defaults to `["music"]`; the
+    forge-transpile endpoint applies the same default when the field
+    is omitted from the wire payload, but we send it explicitly here
+    so the outbound request body always names the domain.
     """
     url = f"{self._base_url}/run"
+    body = {"source": source, "domains": domains or ["music"]}
     client = await self._client_or_ephemeral()
     try:
       resp = await client.post(
         url,
-        json={"source": source},
+        json=body,
         headers={**self._headers(bearer), "Content-Type": "application/json"},
         timeout=60.0,  # longer than the sandbox's own timeout ceiling
       )
