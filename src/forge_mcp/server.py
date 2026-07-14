@@ -25,6 +25,7 @@ import os
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP  # type: ignore[import-untyped]
+from mcp.types import CallToolResult, TextContent
 
 from . import __version__
 from .auth import (
@@ -43,6 +44,40 @@ from .tools import (
 )
 
 log = logging.getLogger("forge-mcp")
+
+
+def _to_call_tool_result(payload: dict[str, Any]) -> CallToolResult:
+  """Convert an internal `{content, structuredContent, isError}` dict
+  (the shape every tool's `run()` returns) into a `CallToolResult`
+  object.
+
+  Drain 2026-07-14-1225 — pre-drain, tool handlers returned this dict
+  directly to FastMCP, which then treated the WHOLE dict as the
+  structured payload and wrapped it again → clients saw
+  `structuredContent.structuredContent.<field>` nesting. FastMCP's
+  `FuncMetadata.convert_result` (mcp/server/fastmcp/utilities/
+  func_metadata.py L114) passes `CallToolResult` instances through
+  UNCHANGED, so returning one from the wrapper collapses the double-
+  wrap.
+
+  Text content items in `payload["content"]` follow the
+  `{type: "text", text: str}` shape — convert each to `TextContent`.
+  """
+  raw_content = payload.get("content", []) or []
+  content_blocks: list[Any] = []
+  for item in raw_content:
+    if isinstance(item, dict) and item.get("type") == "text":
+      content_blocks.append(TextContent(type="text", text=item.get("text", "")))
+    else:
+      # Defensive — pre-drain shape only ever produced text items;
+      # future non-text (image / resource) items would fall through
+      # untouched, but at present we don't emit them.
+      content_blocks.append(item)
+  return CallToolResult(
+    content=content_blocks,
+    structuredContent=payload.get("structuredContent"),
+    isError=bool(payload.get("isError", False)),
+  )
 
 
 def _bearer_from_context(ctx: Context) -> str:
@@ -103,6 +138,12 @@ def _make_server(
   # Tools
   # ---------------------------------------------------------------------------
 
+  # Drain 2026-07-14-1225 — every tool wrapper returns a
+  # `CallToolResult` (built from the internal `run()`'s dict envelope
+  # via `_to_call_tool_result`) so FastMCP passes it through unchanged
+  # instead of double-wrapping. The `run()` functions themselves keep
+  # returning the dict envelope so existing per-tool unit tests
+  # (which call `run()` directly) stay stable.
   @server.tool(
     name=read_note_catalog.TOOL_NAME,
     description=read_note_catalog.DESCRIPTION,
@@ -111,18 +152,16 @@ def _make_server(
   async def _forge_read_note_catalog(
     ctx: Context,
     domain: str | None = None,
-  ) -> dict[str, Any]:
+  ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
-      return auth_error_to_tool_result(exc)
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
     result = await read_note_catalog.run(
       arguments={"domain": domain} if domain is not None else {},
       bearer=bearer,
     )
-    # FastMCP structures the return; downstream MCP clients see both text
-    # and structuredContent because of structured_output=True.
-    return result
+    return _to_call_tool_result(result)
 
   @server.tool(
     name=compile_recipe.TOOL_NAME,
@@ -132,15 +171,16 @@ def _make_server(
   async def _forge_compile_recipe(
     ctx: Context,
     source: str,
-  ) -> dict[str, Any]:
+  ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
-      return auth_error_to_tool_result(exc)
-    return await compile_recipe.run(
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    result = await compile_recipe.run(
       arguments={"source": source},
       bearer=bearer,
     )
+    return _to_call_tool_result(result)
 
   @server.tool(
     name=run_recipe.TOOL_NAME,
@@ -151,15 +191,16 @@ def _make_server(
     ctx: Context,
     source: str,
     domains: list[str] | None = None,
-  ) -> dict[str, Any]:
+  ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
-      return auth_error_to_tool_result(exc)
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
     args: dict[str, Any] = {"source": source}
     if domains is not None:
       args["domains"] = domains
-    return await run_recipe.run(arguments=args, bearer=bearer)
+    result = await run_recipe.run(arguments=args, bearer=bearer)
+    return _to_call_tool_result(result)
 
   @server.tool(
     name=get_run_result.TOOL_NAME,
@@ -169,12 +210,13 @@ def _make_server(
   async def _forge_get_run_result(
     ctx: Context,
     run_id: str,
-  ) -> dict[str, Any]:
+  ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
-      return auth_error_to_tool_result(exc)
-    return await get_run_result.run(arguments={"run_id": run_id}, bearer=bearer)
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    result = await get_run_result.run(arguments={"run_id": run_id}, bearer=bearer)
+    return _to_call_tool_result(result)
 
   @server.tool(
     name=read_notes_in_vault.TOOL_NAME,
@@ -184,16 +226,16 @@ def _make_server(
   async def _forge_read_notes_in_vault(
     ctx: Context,
     filter: str | None = None,
-  ) -> dict[str, Any]:
+  ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
-      return auth_error_to_tool_result(exc)
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
     result = await read_notes_in_vault.run(
       arguments={"filter": filter} if filter is not None else {},
       bearer=bearer,
     )
-    return result
+    return _to_call_tool_result(result)
 
   # ---------------------------------------------------------------------------
   # Resources — forge-note:///{domain}/{name}
