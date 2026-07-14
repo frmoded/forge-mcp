@@ -78,8 +78,16 @@ jq -r '.transpileServiceToken' \
 
 ## Tools
 
+Sprint 1 (read-only surface):
+
 - `forge_read_note_catalog({domain?})` — list library notes.
 - `forge_read_notes_in_vault({filter?})` — list vault notes.
+
+Sprint 2 (authoring loop):
+
+- `forge_compile_recipe({source})` — deterministic Recipe → Python. No LLM,
+  no execution. Returns compiled source + unresolved slot count OR a
+  structured parse error with line/column.
 
 ## Resources
 

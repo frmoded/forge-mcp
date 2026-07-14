@@ -14,7 +14,7 @@ import os
 
 import httpx
 
-from .schemas import NoteEntry, VaultNoteEntry
+from .schemas import CompileResult, NoteEntry, VaultNoteEntry
 
 _DEFAULT_BASE_URL = "http://localhost:8000"
 
@@ -181,3 +181,35 @@ class ForgeServiceClient:
     else:
       raw_notes = []
     return [VaultNoteEntry.model_validate(n) for n in raw_notes]
+
+  # ---------------------------------------------------------------------------
+  # /compile — CW-MCP-2-A
+  # ---------------------------------------------------------------------------
+
+  async def compile_recipe(
+    self, source: str, bearer: str
+  ) -> CompileResult:
+    """Deterministically transpile an E-- Recipe to Python.
+
+    forge-transpile's /compile returns HTTP 200 for BOTH success and
+    parse errors — the payload's `parse_status` field discriminates.
+    Only auth (401/403) and malformed body (422) raise here.
+    """
+    url = f"{self._base_url}/compile"
+    client = await self._client_or_ephemeral()
+    try:
+      resp = await client.post(
+        url,
+        json={"source": source},
+        headers={**self._headers(bearer), "Content-Type": "application/json"},
+      )
+    finally:
+      if self._client is None:
+        await client.aclose()
+
+    if resp.status_code == 404:
+      raise ForgeServiceEndpointMissing("/compile", self._base_url)
+    if resp.status_code >= 400:
+      raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
+
+    return CompileResult.model_validate(resp.json())

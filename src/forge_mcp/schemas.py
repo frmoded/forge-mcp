@@ -109,6 +109,56 @@ class VaultListResult(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Compile (CW-MCP-2-A) — forge_compile_recipe result
+# -----------------------------------------------------------------------------
+
+
+class ParseErrorDetail(BaseModel):
+  """Structured parse-error payload from forge-transpile /compile.
+
+  Mirrors forge-transpile's ParseErrorDetail model verbatim so the
+  wire shape stays symmetric. All fields present even when the parser
+  didn't surface them (line/column may be 0; expected may be "").
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  line: int = Field(..., ge=0, description="1-based line number; 0 = unknown.")
+  column: int = Field(..., ge=0, description="1-based column number; 0 = unknown.")
+  message: str = Field(..., description="Human-readable parse error.")
+  expected: str = Field(
+    "",
+    description="One-line example of what would have parsed; empty if unavailable.",
+  )
+
+
+class CompileResult(BaseModel):
+  """Result envelope for forge_compile_recipe.
+
+  On parse success: `parse_status="ok"` + `python_source` populated +
+  `unresolved_slot_count` reflects how many `{{ ... }}` placeholders
+  survived (agents call `/resolve-slot` before `/run` if > 0).
+
+  On parse failure: `parse_status="parse_error"` + `parse_error`
+  populated. HTTP is still 200 — parse errors are business errors,
+  not protocol errors.
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  parse_status: Literal["ok", "parse_error"] = Field(..., description="'ok' | 'parse_error'")
+  python_source: str | None = Field(
+    None, description="Compiled Python source; None on parse_error."
+  )
+  unresolved_slot_count: int = Field(
+    0, ge=0, description="Number of unresolved `{{ ... }}` slots."
+  )
+  parse_error: ParseErrorDetail | None = Field(
+    None, description="Structured parse error; None on success."
+  )
+
+
+# -----------------------------------------------------------------------------
 # Error envelope
 # -----------------------------------------------------------------------------
 

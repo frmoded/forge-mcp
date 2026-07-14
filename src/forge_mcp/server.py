@@ -33,7 +33,7 @@ from .auth import (
   extract_bearer_from_request,
 )
 from .resources.note_uri import parse_forge_note_uri, read_note_resource
-from .tools import read_note_catalog, read_notes_in_vault
+from .tools import compile_recipe, read_note_catalog, read_notes_in_vault
 
 log = logging.getLogger("forge-mcp")
 
@@ -116,6 +116,24 @@ def _make_server(
     # FastMCP structures the return; downstream MCP clients see both text
     # and structuredContent because of structured_output=True.
     return result
+
+  @server.tool(
+    name=compile_recipe.TOOL_NAME,
+    description=compile_recipe.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_compile_recipe(
+    ctx: Context,
+    source: str,
+  ) -> dict[str, Any]:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return auth_error_to_tool_result(exc)
+    return await compile_recipe.run(
+      arguments={"source": source},
+      bearer=bearer,
+    )
 
   @server.tool(
     name=read_notes_in_vault.TOOL_NAME,
