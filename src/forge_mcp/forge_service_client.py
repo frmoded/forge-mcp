@@ -14,7 +14,7 @@ import os
 
 import httpx
 
-from .schemas import CompileResult, NoteEntry, VaultNoteEntry
+from .schemas import CompileResult, GetRunResult, NoteEntry, RunResult, VaultNoteEntry
 
 _DEFAULT_BASE_URL = "http://localhost:8000"
 
@@ -213,3 +213,73 @@ class ForgeServiceClient:
       raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
 
     return CompileResult.model_validate(resp.json())
+
+  # ---------------------------------------------------------------------------
+  # /run + /run/{id}[/artifact/{name}] — CW-MCP-2-B
+  # ---------------------------------------------------------------------------
+
+  async def run_recipe(self, source: str, bearer: str) -> RunResult:
+    """Compile + execute an E-- Recipe in forge-transpile's sandbox.
+
+    HTTP 200 for BOTH parse errors AND execution failures — the
+    `parse_status` field discriminates. Only auth (401/403) and
+    malformed bodies (422) raise here.
+    """
+    url = f"{self._base_url}/run"
+    client = await self._client_or_ephemeral()
+    try:
+      resp = await client.post(
+        url,
+        json={"source": source},
+        headers={**self._headers(bearer), "Content-Type": "application/json"},
+        timeout=60.0,  # longer than the sandbox's own timeout ceiling
+      )
+    finally:
+      if self._client is None:
+        await client.aclose()
+
+    if resp.status_code == 404:
+      raise ForgeServiceEndpointMissing("/run", self._base_url)
+    if resp.status_code >= 400:
+      raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
+    return RunResult.model_validate(resp.json())
+
+  async def get_run_result(self, run_id: str, bearer: str) -> GetRunResult:
+    """Fetch a previously-executed run's full content by run_id.
+
+    404 → ForgeServiceHTTPError (agent-side maps to isError "run not
+    found or expired"). Same code covers wrong-user AND wrong-id AND
+    expired-run, per the endpoint's isolation-preserving design.
+    """
+    url = f"{self._base_url}/run/{run_id}"
+    client = await self._client_or_ephemeral()
+    try:
+      resp = await client.get(url, headers=self._headers(bearer))
+    finally:
+      if self._client is None:
+        await client.aclose()
+
+    if resp.status_code >= 400:
+      raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
+    return GetRunResult.model_validate(resp.json())
+
+  async def fetch_artifact(
+    self, run_id: str, artifact_name: str, bearer: str
+  ) -> tuple[bytes, str]:
+    """Fetch an artifact's binary body + mime type.
+
+    Returns `(body_bytes, mime_type)`. 404 raises ForgeServiceHTTPError
+    per the same isolation rationale as `get_run_result`.
+    """
+    url = f"{self._base_url}/run/{run_id}/artifact/{artifact_name}"
+    client = await self._client_or_ephemeral()
+    try:
+      resp = await client.get(url, headers=self._headers(bearer))
+    finally:
+      if self._client is None:
+        await client.aclose()
+
+    if resp.status_code >= 400:
+      raise ForgeServiceHTTPError(resp.status_code, url, resp.text)
+    mime = resp.headers.get("content-type", "application/octet-stream")
+    return resp.content, mime

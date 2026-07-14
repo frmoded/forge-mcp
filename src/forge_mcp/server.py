@@ -32,8 +32,15 @@ from .auth import (
   auth_error_to_tool_result,
   extract_bearer_from_request,
 )
+from .resources.artifact_uri import read_artifact_resource
 from .resources.note_uri import parse_forge_note_uri, read_note_resource
-from .tools import compile_recipe, read_note_catalog, read_notes_in_vault
+from .tools import (
+  compile_recipe,
+  get_run_result,
+  read_note_catalog,
+  read_notes_in_vault,
+  run_recipe,
+)
 
 log = logging.getLogger("forge-mcp")
 
@@ -136,6 +143,36 @@ def _make_server(
     )
 
   @server.tool(
+    name=run_recipe.TOOL_NAME,
+    description=run_recipe.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_run_recipe(
+    ctx: Context,
+    source: str,
+  ) -> dict[str, Any]:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return auth_error_to_tool_result(exc)
+    return await run_recipe.run(arguments={"source": source}, bearer=bearer)
+
+  @server.tool(
+    name=get_run_result.TOOL_NAME,
+    description=get_run_result.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_get_run_result(
+    ctx: Context,
+    run_id: str,
+  ) -> dict[str, Any]:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return auth_error_to_tool_result(exc)
+    return await get_run_result.run(arguments={"run_id": run_id}, bearer=bearer)
+
+  @server.tool(
     name=read_notes_in_vault.TOOL_NAME,
     description=read_notes_in_vault.DESCRIPTION,
     structured_output=True,
@@ -204,6 +241,52 @@ def _make_server(
     if contents and "text" in contents[0]:
       return contents[0]["text"]
     return "{}"
+
+  # ---------------------------------------------------------------------------
+  # Resources — forge-artifact:///{run_id}/{artifact_name}   (CW-MCP-2-B)
+  # ---------------------------------------------------------------------------
+
+  @server.resource(
+    "forge-artifact:///{run_id}/{artifact_name}",
+    name="forge-artifact",
+    description=(
+      "Binary artifact produced by a forge_run_recipe call. "
+      "MusicXML / MIDI / PNG / etc. Text mimes return via `text`; "
+      "binaries return base64 via `blob`."
+    ),
+    # Placeholder — actual mime is per-artifact and set on the
+    # returned contents block below.
+    mime_type="application/octet-stream",
+  )
+  async def _read_forge_artifact(run_id: str, artifact_name: str) -> str:
+    # Same context escape as _read_forge_note (see CW-MCP-1-B L47 #3).
+    try:
+      ctx = server.get_context()
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      import json as _json
+
+      return _json.dumps(
+        {
+          "contents": [
+            {
+              "uri": f"forge-artifact:///{run_id}/{artifact_name}",
+              "mimeType": "text/plain",
+              "text": str(exc),
+            }
+          ]
+        }
+      )
+    uri = f"forge-artifact:///{run_id}/{artifact_name}"
+    payload = await read_artifact_resource(uri=uri, bearer=bearer)
+    contents = payload.get("contents", [])
+    if not contents:
+      return "{}"
+    # Return the first content block as a JSON string; MCP clients
+    # unwrap this into the resource-read response envelope.
+    import json as _json
+
+    return _json.dumps(contents[0])
 
   return server
 

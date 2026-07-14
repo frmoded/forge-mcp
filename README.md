@@ -88,10 +88,18 @@ Sprint 2 (authoring loop):
 - `forge_compile_recipe({source})` — deterministic Recipe → Python. No LLM,
   no execution. Returns compiled source + unresolved slot count OR a
   structured parse error with line/column.
+- `forge_run_recipe({source})` — compile + execute in a resource-limited
+  server sandbox. Returns a `run_id` + short preview; artifacts (MusicXML,
+  MIDI, PNGs) accessible via the `forge-artifact://` resource.
+- `forge_get_run_result({run_id})` — fetch the full stdout/stderr +
+  artifact manifest of a previous run. 7-day TTL, per-Bearer isolation.
 
 ## Resources
 
-- `forge-note:///{domain}/{name}` — stable identifier for a library note.
+- `forge-note:///{domain}/{name}` — library note (Sprint 1).
+- `forge-artifact:///{run_id}/{artifact_name}` — on-demand binary fetch
+  for run artifacts (Sprint 2). Text mimes return via `text`; binaries
+  via base64 `blob`.
 
 ## Landing page
 

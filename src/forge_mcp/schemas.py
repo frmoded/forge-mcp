@@ -159,6 +159,54 @@ class CompileResult(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Run (CW-MCP-2-B) — forge_run_recipe + forge_get_run_result
+# -----------------------------------------------------------------------------
+
+
+class RunArtifactManifest(BaseModel):
+  model_config = ConfigDict(extra="forbid")
+
+  name: str = Field(..., description="Filename inside the run's artifact dir.")
+  mime_type: str = Field(..., description="Detected mime type (extension-based).")
+  size_bytes: int = Field(..., ge=0)
+  uri: str = Field(
+    ...,
+    description="forge-artifact:///{run_id}/{name} — resource URI for on-demand fetch.",
+  )
+
+
+class RunResult(BaseModel):
+  """Envelope for forge_run_recipe. Mirrors forge-transpile's RunResponse."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  parse_status: Literal["ok", "parse_error"] = Field(...)
+  run_id: str = Field("", description="Empty on parse_error.")
+  parse_error: ParseErrorDetail | None = None
+  duration_ms: int = 0
+  exit_code: int = 0
+  timed_out: bool = False
+  stdout_preview: str = ""
+  artifacts: list[RunArtifactManifest] = Field(default_factory=list)
+
+
+class GetRunResult(BaseModel):
+  """Envelope for forge_get_run_result. Mirrors forge-transpile's GetRunResponse."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  run_id: str
+  created_at: int
+  expires_at: int
+  duration_ms: int
+  exit_code: int
+  timed_out: bool
+  stdout: str
+  stderr: str
+  artifacts: list[RunArtifactManifest]
+
+
+# -----------------------------------------------------------------------------
 # Error envelope
 # -----------------------------------------------------------------------------
 
