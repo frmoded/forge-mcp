@@ -207,6 +207,39 @@ class GetRunResult(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Commit (CW-MCP-2-C) — forge_commit_recipe result
+# -----------------------------------------------------------------------------
+
+
+class CommitResult(BaseModel):
+  """Envelope for forge_commit_recipe.
+
+  Drain CW-MCP-2-C ships the D-B (facet-scoped commit) + D-mcp-3 (agent-
+  driven version conflict) surface. `committed_version` is the note's
+  new `recipe_version` frontmatter stamp AFTER the write; `run_id` is
+  the return of the internal `forge_run_recipe` invocation that
+  produces artifacts (D-B contract — commit + run are one operation
+  from the agent's perspective).
+
+  `git_sha` is None when the vault isn't git-tracked (per drain §6
+  out-of-scope).
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  note_id: str = Field(..., description="Vault-relative note identifier.")
+  committed_version: int = Field(
+    ..., ge=1, description="New `recipe_version` stamp on the note."
+  )
+  run_id: str = Field(
+    "", description="Empty when the internal run wasn't invoked (e.g., parse error)."
+  )
+  git_sha: str | None = Field(
+    None, description="SHA of the git commit for this write; None if the vault isn't git-tracked."
+  )
+
+
+# -----------------------------------------------------------------------------
 # Error envelope
 # -----------------------------------------------------------------------------
 

@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+from pathlib import Path
 from typing import Any
 
 from mcp.server.fastmcp import Context, FastMCP  # type: ignore[import-untyped]
@@ -35,13 +36,16 @@ from .auth import (
 )
 from .resources.artifact_uri import read_artifact_resource
 from .resources.note_uri import parse_forge_note_uri, read_note_resource
+from .resources.recipe_uri import read_recipe_resource
 from .tools import (
+  commit_recipe,
   compile_recipe,
   get_run_result,
   read_note_catalog,
   read_notes_in_vault,
   run_recipe,
 )
+from .vault_fs import VaultFS, VaultFSError
 
 log = logging.getLogger("forge-mcp")
 
@@ -237,6 +241,32 @@ def _make_server(
     )
     return _to_call_tool_result(result)
 
+  # Drain CW-MCP-2-C — commit_recipe writes to the LOCAL vault fs
+  # directly (Option C — see drain §Architecture Question). Bearer is
+  # still extracted so a mis-configured client can't invoke commit; the
+  # bearer is threaded to the internal `forge_run_recipe` call that
+  # produces artifacts.
+  @server.tool(
+    name=commit_recipe.TOOL_NAME,
+    description=commit_recipe.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_commit_recipe(
+    ctx: Context,
+    source: str,
+    note_id: str,
+    expected_version: int | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"source": source, "note_id": note_id}
+    if expected_version is not None:
+      args["expected_version"] = expected_version
+    result = await commit_recipe.run(arguments=args, bearer=bearer)
+    return _to_call_tool_result(result)
+
   # ---------------------------------------------------------------------------
   # Resources — forge-note:///{domain}/{name}
   # ---------------------------------------------------------------------------
@@ -333,6 +363,48 @@ def _make_server(
     import json as _json
 
     return _json.dumps(contents[0])
+
+  # ---------------------------------------------------------------------------
+  # Resources — forge-recipe:///{note_id}/v{n}   (CW-MCP-2-C)
+  # ---------------------------------------------------------------------------
+  #
+  # Versioned Recipe artifact — reads the Recipe body as it was at git
+  # commit vN of the note. Requires the vault to be git-tracked; when
+  # it isn't (drain §6 out-of-scope), returns a "history unavailable"
+  # text so the agent knows why the version isn't available rather than
+  # seeing a protocol 404.
+  #
+  # No Bearer required — reads local vault git history, same trust
+  # boundary as the forge-mcp process itself.
+
+  @server.resource(
+    "forge-recipe:///{note_id}/v{version}",
+    name="forge-recipe",
+    description=(
+      "Versioned Recipe body at commit v{n} of the note. Requires a "
+      "git-tracked vault; returns 'history unavailable' text otherwise."
+    ),
+    mime_type="text/plain",
+  )
+  async def _read_forge_recipe(note_id: str, version: str) -> str:
+    uri = f"forge-recipe:///{note_id}/v{version}"
+    # Vault path is env-driven (defaults to bluh). Fresh construction
+    # per request so `FORGE_VAULT_PATH` changes take effect without a
+    # server restart during smoke.
+    try:
+      vault_fs = VaultFS(root=Path(os.environ.get("FORGE_VAULT_PATH", "~/forge-vaults/bluh")).expanduser())
+    except VaultFSError as exc:
+      payload = {
+        "contents": [
+          {"uri": uri, "mimeType": "text/plain", "text": f"Vault unavailable: {exc}"}
+        ]
+      }
+    else:
+      payload = read_recipe_resource(uri=uri, vault_fs=vault_fs)
+    contents = payload.get("contents", [])
+    if contents and "text" in contents[0]:
+      return contents[0]["text"]
+    return "{}"
 
   return server
 
