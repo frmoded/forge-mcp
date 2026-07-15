@@ -23,10 +23,10 @@ Pick one:
 
 ```bash
 # From git (after driver runs §Driver ops in the FEEDBACK — repo public + pushed)
-pip install "git+https://github.com/<your-handle>/forge-mcp.git"
+pip install "git+https://github.com/frmoded/forge-mcp.git"
 
 # From a local checkout (developer mode; picks up your local edits)
-git clone https://github.com/<your-handle>/forge-mcp.git ~/projects/forge-mcp
+git clone https://github.com/frmoded/forge-mcp.git ~/projects/forge-mcp
 pip install -e ~/projects/forge-mcp
 ```
 

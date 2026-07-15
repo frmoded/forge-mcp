@@ -12,7 +12,7 @@
 
 ```bash
 # 1. Install (once repo is public — see FEEDBACK §Driver ops)
-pip install "git+https://github.com/<your-handle>/forge-mcp.git"
+pip install "git+https://github.com/frmoded/forge-mcp.git"
 
 # 2. Fetch your Bearer once and export
 export FORGE_MCP_BEARER=$(jq -r '.transpileServiceToken' \
