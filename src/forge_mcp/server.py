@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import logging
 import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -414,13 +415,34 @@ def _make_server(
 
 
 def main() -> None:
+  # Drain CW-MCP-cc-integration — support both transports so the same
+  # `forge-mcp` entry point works for Claude Code (stdio subprocess)
+  # AND the pre-existing Docker/systemd deployment (streamable-http).
+  # `FORGE_MCP_TRANSPORT` picks; default is streamable-http for
+  # back-compat with every install path that predates this drain.
+  transport = os.environ.get("FORGE_MCP_TRANSPORT", "streamable-http").strip().lower()
+  if transport not in ("stdio", "streamable-http", "sse"):
+    raise SystemExit(
+      f"FORGE_MCP_TRANSPORT={transport!r} is not one of "
+      "{'stdio', 'streamable-http', 'sse'}. Use 'stdio' for Claude Code "
+      "subprocess installs, 'streamable-http' for hosted deployments."
+    )
+
+  # Claude Code spawns a stdio subprocess and speaks JSON-RPC over
+  # stdin/stdout — any stray logging on stdout corrupts the protocol
+  # stream. Force logs to stderr in stdio mode.
+  log_stream = sys.stderr if transport == "stdio" else None
   logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(name)s: %(message)s",
+    stream=log_stream,
   )
-  log.info("Starting forge-mcp v%s", __version__)
+  log.info("Starting forge-mcp v%s (transport=%s)", __version__, transport)
   server = _make_server()
-  server.run(transport="streamable-http")
+  # mypy: FastMCP.run has a Literal-typed transport param, but the
+  # `if transport not in (...)` guard above already restricts it to
+  # exactly that literal set.
+  server.run(transport=transport)  # type: ignore[arg-type]
 
 
 if __name__ == "__main__":

@@ -6,7 +6,30 @@
 [library note catalog] → [compile] → [run] → [commit] → [vault note with recipe_version bump]
 ```
 
-## Install
+## Install into Claude Code
+
+**Fastest path** — Claude Code spawns forge-mcp as a stdio subprocess. Full walkthrough at [docs/claude-code-install.md](docs/claude-code-install.md).
+
+```bash
+# 1. Install (once repo is public — see FEEDBACK §Driver ops)
+pip install "git+https://github.com/<your-handle>/forge-mcp.git"
+
+# 2. Fetch your Bearer once and export
+export FORGE_MCP_BEARER=$(jq -r '.transpileServiceToken' \
+  ~/forge-vaults/bluh/.obsidian/plugins/forge-client-obsidian/data.json)
+
+# 3. Register with Claude Code
+claude mcp add forge-mcp \
+  -e FORGE_MCP_BEARER=$FORGE_MCP_BEARER \
+  -e FORGE_TRANSPILE_URL=https://forge.thecodingarena.com \
+  -e FORGE_VAULT_PATH=$HOME/forge-vaults/bluh \
+  -e FORGE_MCP_TRANSPORT=stdio \
+  -- forge-mcp
+
+# 4. Start Claude Code and ask "list the notes in my forge music library."
+```
+
+## Install (other clients)
 
 Full walkthrough (Claude Desktop config, forge-transpile Bearer acquisition, verification smoke, troubleshooting): [docs/install.md](docs/install.md).
 
