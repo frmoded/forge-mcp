@@ -22,8 +22,8 @@ Two transports:
 Pick one:
 
 ```bash
-# From git (after driver runs §Driver ops in the FEEDBACK — repo public + pushed)
-pip install "git+https://github.com/frmoded/forge-mcp.git"
+# From PyPI (recommended — https://pypi.org/project/forge-recipe-mcp/)
+pip install forge-recipe-mcp
 
 # From a local checkout (developer mode; picks up your local edits)
 git clone https://github.com/frmoded/forge-mcp.git ~/projects/forge-mcp

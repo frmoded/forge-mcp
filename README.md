@@ -11,8 +11,8 @@
 **Fastest path** — Claude Code spawns forge-mcp as a stdio subprocess. Full walkthrough at [docs/claude-code-install.md](docs/claude-code-install.md).
 
 ```bash
-# 1. Install (once repo is public — see FEEDBACK §Driver ops)
-pip install "git+https://github.com/frmoded/forge-mcp.git"
+# 1. Install from PyPI (https://pypi.org/project/forge-recipe-mcp/)
+pip install forge-recipe-mcp
 
 # 2. Fetch your Bearer once and export
 export FORGE_MCP_BEARER=$(jq -r '.transpileServiceToken' \

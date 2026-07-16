@@ -2,15 +2,17 @@
 
 Three paths, in order of Sprint 3 maturity:
 
-- **Path 0 — PyPI + Claude Desktop** (RECOMMENDED): `pip install forge-mcp`, add a Claude Desktop stanza. Local Streamable HTTP transport. This is the flow the MCP Registry listing points at (drain CW-MCP-3-B).
+- **Path 0 — PyPI + Claude Desktop** (RECOMMENDED): `pip install forge-recipe-mcp`, add a Claude Desktop stanza. Local Streamable HTTP transport. This is the flow the MCP Registry listing points at (drain CW-MCP-3-B).
 - **Path A — hosted `mcp.forge.example`** (Sprint 3+ hardening): remote Streamable HTTP; not shipped for launch (see [landing-copy.md](../landing-copy.md) "What it explicitly does NOT do").
 - **Path B — self-hosted Docker + nginx + systemd**: for cohort members who want to run the same shape as production locally.
 
 ## Path 0 — PyPI install (fastest)
 
 ```bash
-pip install forge-mcp
+pip install forge-recipe-mcp
 ```
+
+Package page: https://pypi.org/project/forge-recipe-mcp/. The PyPI distribution name is `forge-recipe-mcp` because `forge-mcp` was taken by an unrelated project (see drain CW-MCP-pypi-license-400). The installed CLI command is still `forge-mcp` — no downstream config change.
 
 Configure Claude Desktop by adding to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS) or `%APPDATA%\Claude\claude_desktop_config.json` (Windows):
 

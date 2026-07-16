@@ -21,8 +21,10 @@ forge-mcp exposes the Forge music-composition surface as an MCP server. Your age
 ## Install (30 seconds)
 
 ```bash
-pip install forge-mcp
+pip install forge-recipe-mcp
 ```
+
+(Package page: https://pypi.org/project/forge-recipe-mcp/. The PyPI distribution name is `forge-recipe-mcp` because `forge-mcp` was already taken by an unrelated project; the installed CLI command is still `forge-mcp`.)
 
 Then add to your Claude Desktop config:
 
