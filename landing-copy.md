@@ -58,6 +58,16 @@ Time from prompt to committed Recipe: about 5 seconds.
 - **Wire-shape-clean.** `structuredContent` is the flat outputSchema payload (drain CW-MCP-fastmcp-doublewrap). Every tool's schema is meta-validated at test time (`tests/test_output_schemas_audit.py`).
 - **Sandbox isolation** (via the paired forge-transpile service): AST allowlist pre-check, subprocess rlimits, cwd-scoped artifact discovery, per-Bearer run-store isolation via `sha256(bearer)[:32]`.
 
+## Security posture
+
+**Trust model.** You bring your own Bearer, run forge-mcp locally, and read/write your own vault. Being listed in the Registry changes discovery — not the trust boundary. Every install is opt-in and local; nothing executes without the Bearer holder's consent.
+
+**Sandbox layers** (paired `forge-transpile` service): AST-level import allowlist blocks `os` / `sys` / `subprocess` / `socket` / network libs; subprocess isolation with `rlimits` (CPU ≤ 30 s, memory ≤ 512 MB, `RLIMIT_NPROC=0`, file writes ≤ 10 MB — hard on Linux, best-effort on macOS); per-run cwd scoping under `/tmp/forge-artifacts/{run_id}/`; per-Bearer isolation of the runs store via `sha256(bearer)[:32]`.
+
+**Accidental vs adversarial.** The AST allowlist is a real defense against LLM-generated code that accidentally reaches for `import os`. It is **not** a hardened boundary against adversarial code — `__import__` bypasses are possible; container / seccomp / network-namespace isolation is not applied; egress is not blocked. If your threat model includes untrusted code producers, run forge-mcp itself inside a container.
+
+Full detail: [docs/install.md § Security posture](docs/install.md#security-posture).
+
 ## What it explicitly does NOT do (yet)
 
 - **Multi-user vault isolation.** One vault per forge-mcp instance today; the `FORGE_VAULT_PATH` env var configures which. Sprint 3+ material.

@@ -151,6 +151,38 @@ zero-downtime on the forge-mcp side:
    Bearer token"` on the next request — that's the client's signal to
    rotate.
 
+## Security posture
+
+**Trust model.** You bring your own Bearer token, run forge-mcp locally on your own machine, and read/write your own vault. Nothing in forge-mcp executes code without your Bearer holder's consent. Being listed in the MCP Registry changes discovery — not the trust boundary. Every install is opt-in and local.
+
+**Sandbox layers** (paired forge-transpile service — see [forge-transpile/sandbox.py](https://github.com/frmoded/forge-transpile/blob/main/sandbox.py)):
+
+- **AST-level import allowlist.** Recipe-generated Python is walked with `ast` before execution; imports outside a strict list (`math`, `random`, `music21`, vendored `engine_libs.*`, …) reject before the subprocess spawns. Blocks casual reach into `os`, `sys`, `subprocess`, `socket`, `pathlib`, `urllib`, `requests`, `httpx`.
+- **Subprocess isolation.** Each run spawns a fresh Python subprocess with per-process `rlimits`: CPU ≤ 30s, address space ≤ 512 MB, `RLIMIT_NPROC=0` (no fork), file writes ≤ 10 MB. Hard limits on Linux (prod EC2); best-effort per-limit on macOS (some `setrlimit` calls no-op there).
+- **Per-run cwd scoping.** Artifact discovery is bounded to `/tmp/forge-artifacts/{run_id}/` — one run can't read another run's files.
+- **Per-Bearer isolation of the runs store.** Every stored run is keyed by `sha256(bearer)[:32]`. A leaked `run_id` cannot be fetched with a different Bearer — `GET /run/{id}` returns 404 (not 403) to avoid confirming the id exists.
+
+**Accidental vs adversarial.** The AST allowlist is a real defense against **accidental attacks** — the common case is an LLM generating code that tries `import os` because it's trained on general Python and forgot the domain constraint. It is **not** a hardened boundary against **adversarial code**:
+
+- Determined attacks via `__import__` string manipulation or reflection can bypass the AST check.
+- **Container / namespace isolation** (rootless podman, `bwrap`, gVisor, Firecracker) is NOT applied. Subprocess shares the host process + network namespace within the rlimit budget.
+- **Network egress** is not blocked at the sandbox level. `music21` can in principle fetch remote XML if code passes it a URL; no known vendored code path does this, but the surface exists.
+- **Filesystem reads outside cwd** are possible for anything the sandbox uid can read. Only writes are contained.
+
+If your threat model includes untrusted code producers, do NOT rely on forge-mcp's sandbox alone — run forge-mcp itself inside a container.
+
+**Recommendations for users.**
+
+- Only install forge-mcp from sources you trust: this GitHub repo (`https://github.com/frmoded/forge-mcp`) or its PyPI package.
+- Use a distinct Bearer per environment where possible (one token per user today; multi-tenant is Sprint 4+ material).
+- Report unexpected sandbox escapes at [github.com/frmoded/forge-mcp/issues](https://github.com/frmoded/forge-mcp/issues).
+
+**What Sprint 4+ may add if the threat model warrants it** (not roadmapped):
+
+- Container isolation for the sandbox subprocess (rootless podman / `bwrap` wrapper). ~50 ms per-run cost.
+- Network `unshare -n` in the sandbox's `preexec_fn`. Near-zero cost when isolation is already in play.
+- `seccomp` filter dropping `execve`, `ptrace`, `mount`, and other syscalls the sandbox has no business making.
+
 ## Troubleshooting
 
 - **`AUTH_MISSING` in every tool call** — your MCP client isn't sending
