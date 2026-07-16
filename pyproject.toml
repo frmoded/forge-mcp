@@ -1,5 +1,5 @@
 [project]
-name = "forge-mcp"
+name = "forge-recipe-mcp"
 version = "0.1.0"
 description = "MCP server for the Forge E-- library note catalog + Recipe authoring loop (compile / run / commit)."
 readme = "README.md"
