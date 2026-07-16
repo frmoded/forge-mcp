@@ -114,3 +114,5 @@ Rotation is zero-downtime on the forge-mcp side: change `FORGE_TRANSPILE_SECRET`
 - **[forge](https://github.com/frmoded/forge)** — the E-- parser + transpiler + core music library. forge-mcp vendors a snapshot of `forge/recipe/` per the CW-MCP-2-A architecture; drift is caught by `scripts/check-recipe-drift.sh` in the forge-transpile repo.
 - **[forge-transpile](https://github.com/frmoded/forge-transpile)** — the FastAPI service exposing `/compile` / `/run` / `/catalog` etc. that forge-mcp's tools proxy for the transpile + sandboxed-run paths. Vault reads + commits are LOCAL and don't hit forge-transpile.
 - **forge-client-obsidian** — the Obsidian plugin end of the same authoring loop. forge-mcp writes to the SAME vault the plugin reads/renders; both share the note-file format.
+
+<!-- mcp-name: io.github.frmoded/forge-mcp -->

@@ -3,7 +3,7 @@
   "name": "io.github.frmoded/forge-mcp",
   "title": "Forge MCP",
   "description": "MCP server for the Forge E-- library note catalog + Recipe authoring loop (compile / run / commit). Composes generative music via E-- (a small DSL that compiles to Python running music21).",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "websiteUrl": "https://github.com/frmoded/forge-mcp",
   "repository": {
     "url": "https://github.com/frmoded/forge-mcp",
@@ -14,20 +14,11 @@
       "registryType": "pypi",
       "registryBaseUrl": "https://pypi.org",
       "identifier": "forge-recipe-mcp",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "runtimeHint": "uvx",
       "transport": {
-        "type": "streamable-http",
-        "url": "http://localhost:{--port}/mcp"
+        "type": "stdio"
       },
-      "packageArguments": [
-        {
-          "type": "named",
-          "name": "--port",
-          "description": "Local port for the forge-mcp Streamable HTTP transport.",
-          "default": "8765"
-        }
-      ],
       "environmentVariables": [
         {
           "name": "FORGE_TRANSPILE_URL",
@@ -51,8 +42,8 @@
   "_meta": {
     "io.modelcontextprotocol.registry/publisher-provided": {
       "tool": "manual-drain",
-      "drain_id": "CW-MCP-3-B",
-      "notes": "Manifest hand-authored per drain 2026-07-14-1630. Repository, PyPI package, and Registry submission all depend on driver-side auth (GitHub repo creation, twine upload, registry publish); this manifest is the payload the driver submits once those preconditions are met."
+      "drain_id": "CW-MCP-registry-pr-prep",
+      "notes": "Manifest updated for stdio transport + version 0.1.1 per drain 2026-07-16-1200. Registry uses mcp-publisher CLI + GitHub OAuth device flow; PyPI ownership verified by mcp-name marker in package README (see README bottom)."
     }
   }
 }
