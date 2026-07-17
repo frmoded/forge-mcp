@@ -287,6 +287,61 @@ class CreateNoteResult(BaseModel):
   absolute_path: str = Field(..., description="Absolute filesystem path.")
 
 
+class NoteContent(BaseModel):
+  """Full V2a content of a single vault note.
+
+  CW-MCP-read-note. Returned by forge_read_note. Missing facets
+  surface as None (Recipe/Python/Data) or empty (Description); the
+  raw field always carries the original markdown so agents can
+  reconstruct any structure the parser doesn't expose."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  note_id: str = Field(..., description="Vault-relative note identifier.")
+  vault: str = Field(..., description="Vault name the note lives in.")
+  frontmatter: dict[str, str] = Field(
+    default_factory=dict,
+    description=(
+      "Parsed YAML frontmatter (shallow — scalar values only). Lists / "
+      "nested objects appear as their raw string form."
+    ),
+  )
+  description: str = Field(
+    "", description="Body under `# Description`; empty when absent."
+  )
+  recipe: str | None = Field(
+    None, description="Body under `# Recipe` (or legacy `# E--`); None when absent."
+  )
+  python: str | None = Field(
+    None, description="Body under `# Python`; None when absent."
+  )
+  data: str | None = Field(
+    None,
+    description=(
+      "Body under `# Data` as raw text; None when absent. Callers parse "
+      "the mimetype (typically YAML) themselves."
+    ),
+  )
+  inputs: list[str] = Field(
+    default_factory=list,
+    description=(
+      "Declared inputs — from frontmatter `inputs: [x, y]` (canonical) "
+      "or a `Inputs: x, y` line in Description (legacy). Empty if none."
+    ),
+  )
+  raw: str = Field(
+    ..., description="Full markdown source, verbatim."
+  )
+
+
+class ReadNoteResult(BaseModel):
+  """Result envelope for forge_read_note."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  note: NoteContent = Field(..., description="Parsed content of the requested note.")
+
+
 class RegisterVaultResult(BaseModel):
   """Result envelope for forge_register_vault (runtime registration).
 

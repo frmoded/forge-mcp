@@ -149,6 +149,38 @@ def _parse_frontmatter_dict(text: str) -> dict[str, str]:
   return out
 
 
+def _extract_inputs(frontmatter_dict: dict[str, str], description_body: str) -> list[str]:
+  """CW-MCP-read-note. Return the note's declared inputs as a list of
+  bare names.
+
+  Priority:
+    1. Frontmatter `inputs: [a, b, c]` — the canonical V2a form. The
+       shallow frontmatter parser stores this as a string `"[a, b, c]"`;
+       we split-and-strip.
+    2. Description-body `Inputs:` line — legacy fallback shape.
+
+  Returns [] when neither is present. Non-alphanumeric junk is filtered
+  (names must match `[A-Za-z_][A-Za-z0-9_]*`)."""
+  raw = frontmatter_dict.get("inputs")
+  if raw:
+    inner = raw.strip()
+    if inner.startswith("[") and inner.endswith("]"):
+      inner = inner[1:-1]
+    tokens = [t.strip().strip('"').strip("'") for t in inner.split(",")]
+    return [t for t in tokens if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", t)]
+  # Description-body fallback: look for a line like `Inputs: a, b, c`
+  # (case-insensitive header, comma-separated body).
+  for line in description_body.splitlines():
+    m = re.match(r"^\s*inputs\s*:\s*(.*)$", line, re.IGNORECASE)
+    if m:
+      body = m.group(1).strip()
+      if body.startswith("[") and body.endswith("]"):
+        body = body[1:-1]
+      tokens = [t.strip().strip('"').strip("'") for t in body.split(",")]
+      return [t for t in tokens if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", t)]
+  return []
+
+
 def _update_frontmatter_line(text: str, key: str, value: str) -> str:
   """Replace `key: <old>` with `key: <value>`; append if key not present.
   Preserves everything else in the block byte-for-byte."""
@@ -261,6 +293,62 @@ def parse_note(raw: str) -> ParsedNote:
     post_recipe="".join(post_recipe_lines),
     has_recipe_facet=True,
   )
+
+
+def extract_all_facets(raw: str) -> dict[str, str]:
+  """Return a dict mapping facet-header name (without the leading `# `)
+  to the facet's body text. Covers Description / Recipe / E-- / Python /
+  Data / Inputs — every top-level `# Foo` header the walker sees.
+
+  CW-MCP-read-note (2026-07-17). parse_note focuses on Recipe splicing
+  and only slices the Recipe body; forge_read_note needs full-content
+  access to every facet. Rather than complicate parse_note's contract,
+  this helper walks the body separately with the same line-oriented
+  header scan.
+
+  Legacy `# E--` is treated as an alias for `# Recipe` (matches
+  parse_note's behavior; V2a notes may still use the old header).
+
+  Body between the frontmatter closing `---` and the first `# Foo`
+  header is discarded (typical V2a notes don't have leading prose).
+  """
+  # Skip frontmatter if present.
+  body = raw
+  if raw.lstrip().startswith(_FRONTMATTER_FENCE):
+    idx = raw.find(_FRONTMATTER_FENCE)
+    after_first = raw[idx + len(_FRONTMATTER_FENCE):]
+    if after_first.startswith("\n"):
+      after_first = after_first[1:]
+    end_idx = after_first.find(f"\n{_FRONTMATTER_FENCE}")
+    if end_idx != -1:
+      body = after_first[end_idx + 1 + len(_FRONTMATTER_FENCE):]
+      if body.startswith("\n"):
+        body = body[1:]
+
+  facets: dict[str, str] = {}
+  current_key: str | None = None
+  current_lines: list[str] = []
+
+  def _flush() -> None:
+    nonlocal current_key
+    if current_key is not None:
+      facets[current_key] = "".join(current_lines).strip("\n")
+
+  for line in body.splitlines(keepends=True):
+    stripped = line.rstrip("\n").rstrip("\r")
+    if stripped.startswith("# ") and not stripped.startswith("## "):
+      # New top-level facet header.
+      _flush()
+      header = stripped[2:].strip()
+      # Normalize the legacy alias so callers see a single canonical key.
+      if header == "E--":
+        header = "Recipe"
+      current_key = header
+      current_lines = []
+    elif current_key is not None:
+      current_lines.append(line)
+  _flush()
+  return facets
 
 
 def splice_recipe(raw: str, new_recipe_body: str, new_version: int) -> str:
@@ -500,6 +588,42 @@ class VaultFS:
       git_sha = _git_commit_file(self.root, path, message)
 
     return new_version, git_sha
+
+  # -- Read note content (CW-MCP-read-note) ---------------------------------
+
+  def read_note_content(self, note_id: str) -> dict:
+    """Read a vault note and return the full parsed content: frontmatter
+    (dict), each V2a facet body (Description / Recipe / Python / Data /
+    Inputs), inputs list (from frontmatter or Description), and the raw
+    markdown source.
+
+    Reuses the standard path-traversal defense via `note_path`.
+    Raises NoteNotFound if the path doesn't resolve to an existing file.
+
+    Fields returned (values are strings or None; `inputs` is a list;
+    `frontmatter` is a dict):
+      raw, frontmatter, description, recipe, python, data, inputs
+    """
+    path = self.note_path(note_id)
+    if not path.is_file():
+      raise NoteNotFound(f"note {note_id!r} not found at {path}")
+    raw = path.read_text(encoding="utf-8")
+    parsed = parse_note(raw)
+    facets = extract_all_facets(raw)
+    description = facets.get("Description") or ""
+    recipe = facets.get("Recipe")
+    python = facets.get("Python")
+    data = facets.get("Data")
+    inputs = _extract_inputs(parsed.frontmatter_dict, description)
+    return {
+      "raw": raw,
+      "frontmatter": dict(parsed.frontmatter_dict),
+      "description": description,
+      "recipe": recipe,
+      "python": python,
+      "data": data,
+      "inputs": inputs,
+    }
 
   # -- Directory + note creation (CW-MCP-multi-vault-create-dir) ------------
 

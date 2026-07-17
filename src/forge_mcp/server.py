@@ -45,6 +45,7 @@ from .tools import (
   create_note,
   get_run_result,
   list_vaults,
+  read_note,
   read_note_catalog,
   read_notes_in_vault,
   register_vault,
@@ -417,6 +418,32 @@ def _make_server(
       arguments={"name": name},
       bearer=bearer,
       vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  # ---------------------------------------------------------------------------
+  # Read a single vault note (CW-MCP-read-note)
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=read_note.TOOL_NAME,
+    description=read_note.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_read_note(
+    ctx: Context,
+    note_id: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"note_id": note_id}
+    if vault is not None:
+      args["vault"] = vault
+    result = await read_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)
 
