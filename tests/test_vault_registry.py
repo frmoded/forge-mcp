@@ -9,8 +9,10 @@ from pathlib import Path
 
 import pytest
 
+from forge_mcp.vault_fs import VaultFS
 from forge_mcp.vault_registry import (
   DuplicateVaultNameError,
+  LastVaultRemovalError,
   VaultNotFoundError,
   VaultRegistry,
   VaultRegistryError,
@@ -125,3 +127,55 @@ def test_list_returns_all_registered(two_vaults: tuple[Path, Path]):
   for e in entries:
     assert set(e.keys()) == {"name", "path", "note_count"}
     assert e["note_count"] == 0  # empty vaults
+
+
+# ---------------------------------------------------------------------------
+# Runtime add / remove (CW-MCP-runtime-vault-registration)
+# ---------------------------------------------------------------------------
+
+
+def test_add_updates_list_output(two_vaults: tuple[Path, Path], tmp_path: Path):
+  """Drain §5 test #10 — after add(), list() reflects it."""
+  a, b = two_vaults
+  reg = VaultRegistry({"alpha": VaultFS(root=a)})
+  new = tmp_path / "runtime_added"
+  new.mkdir()
+  reg.add("runtime_added", VaultFS(root=new))
+  entries = reg.list()
+  assert [e["name"] for e in entries] == ["alpha", "runtime_added"]
+
+
+def test_remove_updates_list_output(two_vaults: tuple[Path, Path]):
+  """Drain §5 test #11 — after remove(), list() no longer shows it."""
+  a, b = two_vaults
+  reg = VaultRegistry({"alpha": VaultFS(root=a), "beta": VaultFS(root=b)})
+  reg.remove("beta")
+  entries = reg.list()
+  assert [e["name"] for e in entries] == ["alpha"]
+
+
+def test_add_rejects_duplicate_name(two_vaults: tuple[Path, Path], tmp_path: Path):
+  """Adding a name that's already in the registry raises."""
+  a, _ = two_vaults
+  reg = VaultRegistry({"alpha": VaultFS(root=a)})
+  other = tmp_path / "other"
+  other.mkdir()
+  with pytest.raises(DuplicateVaultNameError):
+    reg.add("alpha", VaultFS(root=other))
+
+
+def test_remove_rejects_unknown_name(two_vaults: tuple[Path, Path]):
+  a, b = two_vaults
+  reg = VaultRegistry({"alpha": VaultFS(root=a), "beta": VaultFS(root=b)})
+  with pytest.raises(VaultNotFoundError):
+    reg.remove("gamma")
+
+
+def test_remove_last_vault_raises(two_vaults: tuple[Path, Path]):
+  """Safety invariant: cannot leave the registry empty."""
+  a, _ = two_vaults
+  reg = VaultRegistry({"alpha": VaultFS(root=a)})
+  with pytest.raises(LastVaultRemovalError):
+    reg.remove("alpha")
+  # Vault still there after refusal.
+  assert reg.names() == ["alpha"]

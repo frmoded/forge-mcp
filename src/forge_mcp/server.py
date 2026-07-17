@@ -47,7 +47,9 @@ from .tools import (
   list_vaults,
   read_note_catalog,
   read_notes_in_vault,
+  register_vault,
   run_recipe,
+  unregister_vault,
 )
 from .vault_fs import VaultFS, VaultFSError
 from .vault_registry import VaultRegistry, VaultRegistryError
@@ -368,6 +370,53 @@ def _make_server(
       args["vault"] = vault
     result = await create_note.run(
       arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  # ---------------------------------------------------------------------------
+  # Runtime vault add / remove (CW-MCP-runtime-vault-registration)
+  # ---------------------------------------------------------------------------
+  # In-memory only — runtime registrations do NOT persist across
+  # server restart. Use FORGE_VAULTS for durable configuration.
+
+  @server.tool(
+    name=register_vault.TOOL_NAME,
+    description=register_vault.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_register_vault(
+    ctx: Context,
+    name: str,
+    path: str,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    result = await register_vault.run(
+      arguments={"name": name, "path": path},
+      bearer=bearer,
+      vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=unregister_vault.TOOL_NAME,
+    description=unregister_vault.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_unregister_vault(
+    ctx: Context,
+    name: str,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    result = await unregister_vault.run(
+      arguments={"name": name},
+      bearer=bearer,
+      vault_registry=registry,
     )
     return _to_call_tool_result(result)
 

@@ -44,6 +44,12 @@ class DuplicateVaultNameError(VaultRegistryError):
   """FORGE_VAULTS contained two entries with the same name."""
 
 
+class LastVaultRemovalError(VaultRegistryError):
+  """Refused to remove the only remaining vault. Safety invariant per
+  CW-MCP-runtime-vault-registration §4.3 — an empty registry leaves
+  subsequent tool calls with nothing to target."""
+
+
 _DEFAULT_VAULT_NAME = "default"
 _DEFAULT_VAULT_PATH = "~/forge-vaults/bluh"
 
@@ -152,3 +158,40 @@ class VaultRegistry:
 
   def names(self) -> list[str]:
     return list(self._vaults.keys())
+
+  # -- Runtime add / remove (CW-MCP-runtime-vault-registration) -------------
+
+  def add(self, name: str, vault_fs: VaultFS) -> None:
+    """Register a new vault at runtime.
+
+    Raises DuplicateVaultNameError if `name` is already registered;
+    caller must remove first (no silent overwrite).
+    """
+    if name in self._vaults:
+      raise DuplicateVaultNameError(
+        f"Vault {name!r} is already registered. Unregister first, then re-add."
+      )
+    self._vaults[name] = vault_fs
+
+  def remove(self, name: str) -> None:
+    """Unregister a vault at runtime.
+
+    Raises VaultNotFoundError if `name` isn't registered.
+    Raises LastVaultRemovalError if `name` is the only vault left —
+    the registry must always retain at least one entry so subsequent
+    tool calls have somewhere to target.
+
+    Filesystem side effects: NONE. Files stay put; only the mapping
+    is removed.
+    """
+    if name not in self._vaults:
+      available = ", ".join(sorted(self._vaults.keys()))
+      raise VaultNotFoundError(
+        f"Vault {name!r} is not registered. Available vaults: {available}."
+      )
+    if len(self._vaults) == 1:
+      raise LastVaultRemovalError(
+        f"Cannot remove {name!r}: it is the only remaining registered vault. "
+        f"Register another vault first, then remove this one."
+      )
+    del self._vaults[name]

@@ -287,6 +287,32 @@ class CreateNoteResult(BaseModel):
   absolute_path: str = Field(..., description="Absolute filesystem path.")
 
 
+class RegisterVaultResult(BaseModel):
+  """Result envelope for forge_register_vault (runtime registration).
+
+  CW-MCP-runtime-vault-registration."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  registered_vault: VaultEntry = Field(
+    ..., description="The vault that was just added to the live registry."
+  )
+
+
+class UnregisterVaultResult(BaseModel):
+  """Result envelope for forge_unregister_vault."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  unregistered: bool = Field(
+    ..., description="True on success; false on isError paths (populated for schema symmetry)."
+  )
+  remaining_vaults: list[str] = Field(
+    default_factory=list,
+    description="Names of the vaults still registered after the removal.",
+  )
+
+
 # -----------------------------------------------------------------------------
 # Error envelope
 # -----------------------------------------------------------------------------
