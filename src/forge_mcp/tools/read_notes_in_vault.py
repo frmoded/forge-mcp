@@ -22,6 +22,7 @@ from typing import Any
 
 from ..schemas import VaultListResult, VaultNoteEntry
 from ..vault_fs import VaultFS, VaultFSError
+from ..vault_registry import VaultNotFoundError, VaultRegistry
 
 TOOL_NAME = "forge_read_notes_in_vault"
 
@@ -31,7 +32,14 @@ INPUT_SCHEMA: dict[str, Any] = {
     "filter": {
       "type": "string",
       "description": "Optional substring filter on note_id (case-sensitive).",
-    }
+    },
+    "vault": {
+      "type": "string",
+      "description": (
+        "Vault name (from forge_list_vaults). Optional — defaults to "
+        "the first-registered vault."
+      ),
+    },
   },
 }
 
@@ -85,6 +93,7 @@ async def run(
   arguments: dict[str, Any],
   bearer: str,  # noqa: ARG001 — kept for wrapper-signature symmetry with other tools
   vault_fs: VaultFS | None = None,
+  vault_registry: VaultRegistry | None = None,
 ) -> dict[str, Any]:
   """Execute the tool. Returns the MCP tool-result shape.
 
@@ -93,26 +102,41 @@ async def run(
   signature so the FastMCP wrapper's call site stays symmetric with the
   other tools (see server.py::_forge_read_notes_in_vault), but the
   local read path doesn't need it — no upstream forge-transpile call.
+
+  `vault_registry` supersedes `vault_fs` for multi-vault dispatch
+  (CW-MCP-multi-vault-create-dir); the caller passes it in and
+  `arguments['vault']` is resolved through the registry.
   """
   filter_ = arguments.get("filter")
+  vault_name = arguments.get("vault")
 
   if vault_fs is None:
-    try:
-      vault_fs = VaultFS(root=_vault_root_from_env())
-    except VaultFSError as exc:
-      return {
-        "content": [
-          {
-            "type": "text",
-            "text": (
-              f"Vault filesystem unavailable: {exc}. Set FORGE_VAULT_PATH "
-              "to an existing vault directory in the forge-mcp environment."
-            ),
-          }
-        ],
-        "structuredContent": {"notes": []},
-        "isError": True,
-      }
+    if vault_registry is not None:
+      try:
+        vault_fs = vault_registry.get(vault_name)
+      except VaultNotFoundError as exc:
+        return {
+          "content": [{"type": "text", "text": str(exc)}],
+          "structuredContent": {"notes": []},
+          "isError": True,
+        }
+    else:
+      try:
+        vault_fs = VaultFS(root=_vault_root_from_env())
+      except VaultFSError as exc:
+        return {
+          "content": [
+            {
+              "type": "text",
+              "text": (
+                f"Vault filesystem unavailable: {exc}. Set FORGE_VAULT_PATH "
+                "to an existing vault directory in the forge-mcp environment."
+              ),
+            }
+          ],
+          "structuredContent": {"notes": []},
+          "isError": True,
+        }
 
   raw_entries = vault_fs.list_notes(filter=filter_)
   notes = [VaultNoteEntry.model_validate(e) for e in raw_entries]

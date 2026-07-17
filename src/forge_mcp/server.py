@@ -41,12 +41,16 @@ from .resources.recipe_uri import read_recipe_resource
 from .tools import (
   commit_recipe,
   compile_recipe,
+  create_directory,
+  create_note,
   get_run_result,
+  list_vaults,
   read_note_catalog,
   read_notes_in_vault,
   run_recipe,
 )
 from .vault_fs import VaultFS, VaultFSError
+from .vault_registry import VaultRegistry, VaultRegistryError
 
 log = logging.getLogger("forge-mcp")
 
@@ -127,7 +131,20 @@ def _bearer_from_context(ctx: Context) -> str:
 def _make_server(
   host: str | None = None,
   port: int | None = None,
+  vault_registry: VaultRegistry | None = None,
 ) -> FastMCP:
+  # CW-MCP-multi-vault-create-dir: construct the registry once at
+  # startup, thread through to every vault-touching tool. If the caller
+  # (tests) injects one, use that; otherwise parse from env.
+  if vault_registry is None:
+    try:
+      vault_registry = VaultRegistry.from_env()
+    except VaultRegistryError as exc:
+      # Fatal — server can't serve vault tools without a usable registry.
+      log.error("Vault registry unavailable: %s", exc)
+      raise
+  # Local capture so nested handlers keep type-narrow reference.
+  registry: VaultRegistry = vault_registry
   server: FastMCP = FastMCP(
     name="forge-mcp",
     instructions=(
@@ -227,6 +244,8 @@ def _make_server(
   # HTTP roundtrip). Bearer still extracted so mis-configured clients
   # fail loudly at the same layer as every other tool; not threaded
   # downstream because the local read has no upstream service to hit.
+  # CW-MCP-multi-vault-create-dir — `vault` param routes through the
+  # registry.
   @server.tool(
     name=read_notes_in_vault.TOOL_NAME,
     description=read_notes_in_vault.DESCRIPTION,
@@ -235,14 +254,21 @@ def _make_server(
   async def _forge_read_notes_in_vault(
     ctx: Context,
     filter: str | None = None,
+    vault: str | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
       return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {}
+    if filter is not None:
+      args["filter"] = filter
+    if vault is not None:
+      args["vault"] = vault
     result = await read_notes_in_vault.run(
-      arguments={"filter": filter} if filter is not None else {},
+      arguments=args,
       bearer=bearer,
+      vault_registry=registry,
     )
     return _to_call_tool_result(result)
 
@@ -261,6 +287,7 @@ def _make_server(
     source: str,
     note_id: str,
     expected_version: int | None = None,
+    vault: str | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -269,7 +296,79 @@ def _make_server(
     args: dict[str, Any] = {"source": source, "note_id": note_id}
     if expected_version is not None:
       args["expected_version"] = expected_version
-    result = await commit_recipe.run(arguments=args, bearer=bearer)
+    if vault is not None:
+      args["vault"] = vault
+    result = await commit_recipe.run(
+      arguments=args,
+      bearer=bearer,
+      vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  # ---------------------------------------------------------------------------
+  # Multi-vault + create tools (CW-MCP-multi-vault-create-dir)
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=list_vaults.TOOL_NAME,
+    description=list_vaults.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_list_vaults(ctx: Context) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    result = await list_vaults.run(
+      arguments={}, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=create_directory.TOOL_NAME,
+    description=create_directory.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_create_directory(
+    ctx: Context,
+    path: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"path": path}
+    if vault is not None:
+      args["vault"] = vault
+    result = await create_directory.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=create_note.TOOL_NAME,
+    description=create_note.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_create_note(
+    ctx: Context,
+    note_id: str,
+    description: str | None = None,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"note_id": note_id}
+    if description is not None:
+      args["description"] = description
+    if vault is not None:
+      args["vault"] = vault
+    result = await create_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
     return _to_call_tool_result(result)
 
   # ---------------------------------------------------------------------------

@@ -56,6 +56,26 @@ class NoteNotFound(VaultFSError):
   """Note file doesn't exist inside the vault."""
 
 
+class NoteExists(VaultFSError):
+  """create_note_shell was called on a path where a note already lives.
+
+  CW-MCP-multi-vault-create-dir: separates the fresh-note-creation path
+  from the commit_recipe path. commit_recipe intentionally creates fresh
+  notes as a side effect; create_note_shell refuses to overwrite so the
+  agent can't accidentally clobber an authored note by asking for an
+  empty shell.
+  """
+
+  def __init__(self, note_id: str, path: Path) -> None:
+    super().__init__(f"Note {note_id!r} already exists at {path}.")
+    self.note_id = note_id
+    self.path = path
+
+
+class DirInvalid(VaultFSError):
+  """mkdir was asked to create an invalid path (traversal / hidden / …)."""
+
+
 class VersionConflict(VaultFSError):
   """Caller's `expected_version` didn't match the note's current version.
 
@@ -320,6 +340,33 @@ def splice_recipe(raw: str, new_recipe_body: str, new_version: int) -> str:
 _NOTE_ID_SEGMENT = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\- ]*$")
 
 
+def _validate_dir_path(path: str) -> None:
+  """Path-traversal defense for `mkdir` targets. Mirrors _validate_note_id
+  but permits empty segments (path may end with `/` — normalized away).
+
+  CW-MCP-multi-vault-create-dir. Same segment allowlist as note_id so
+  the agent can't create a `.git` directory or escape via `..`.
+  """
+  if not path or not path.strip("/"):
+    raise DirInvalid("directory path is empty")
+  if "\x00" in path:
+    raise DirInvalid("directory path contains NUL byte")
+  if path.startswith("/"):
+    raise DirInvalid(f"directory path must be vault-relative, got {path!r}")
+  for seg in path.split("/"):
+    if seg in ("", ".", ".."):
+      if seg == "":
+        continue  # trailing slash — ok
+      raise DirInvalid(f"directory path {path!r} contains a forbidden segment {seg!r}")
+    if seg.startswith("."):
+      raise DirInvalid(f"directory path {path!r} refers to a hidden path {seg!r}")
+    if not _NOTE_ID_SEGMENT.match(seg):
+      raise DirInvalid(
+        f"directory path {path!r} contains a segment with unsupported "
+        f"characters: {seg!r}"
+      )
+
+
 def _validate_note_id(note_id: str) -> None:
   if not note_id:
     raise NoteIdInvalid("note_id is empty")
@@ -453,6 +500,54 @@ class VaultFS:
       git_sha = _git_commit_file(self.root, path, message)
 
     return new_version, git_sha
+
+  # -- Directory + note creation (CW-MCP-multi-vault-create-dir) ------------
+
+  def mkdir(self, path: str) -> Path:
+    """Create a directory inside the vault (parents=True, exist_ok=True).
+
+    Path-traversal defense: rejects `..` segments, absolute paths, hidden
+    segments, NUL bytes, unsupported characters. Symlink escape check
+    same as note_path (resolve + relative_to).
+
+    Idempotent — mkdir -p semantics; safe to call twice.
+
+    Returns the absolute path created.
+    """
+    _validate_dir_path(path)
+    rel = path.rstrip("/")
+    candidate = (self.root / rel).resolve()
+    try:
+      candidate.relative_to(self.root)
+    except ValueError as exc:
+      raise DirInvalid(
+        f"directory path {path!r} resolves outside vault root {self.root}"
+      ) from exc
+    candidate.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+  def create_note_shell(self, note_id: str, description: str = "") -> Path:
+    """Create a fresh note with minimal frontmatter + optional Description.
+    NO Recipe facet — that's commit_recipe's job.
+
+    Fails cleanly if the note already exists (raises NoteExists). Does
+    NOT overwrite. If the parent directory doesn't exist, it is created
+    (mkdir -p semantics).
+
+    Returns the absolute path created.
+    """
+    path = self.note_path(note_id)
+    if path.exists():
+      raise NoteExists(note_id, path)
+    # Minimal V2a shell: empty frontmatter + Description section.
+    desc_body = description.strip()
+    if desc_body:
+      content = f"---\n---\n\n# Description\n\n{desc_body}\n"
+    else:
+      content = "---\n---\n\n# Description\n\n\n"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(path, content)
+    return path
 
   # -- Listing (for forge_read_notes_in_vault) ------------------------------
 

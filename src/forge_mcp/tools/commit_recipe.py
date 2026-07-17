@@ -32,6 +32,7 @@ from ..vault_fs import (
   VaultFSError,
   VersionConflict,
 )
+from ..vault_registry import VaultNotFoundError, VaultRegistry
 from . import run_recipe
 
 TOOL_NAME = "forge_commit_recipe"
@@ -60,6 +61,14 @@ INPUT_SCHEMA: dict[str, Any] = {
         "modified since. Omit / null on first commit to a fresh note."
       ),
       "minimum": 0,
+    },
+    "vault": {
+      "type": "string",
+      "description": (
+        "Vault name (from forge_list_vaults). Optional — defaults to "
+        "the first-registered vault. Multi-vault support per "
+        "CW-MCP-multi-vault-create-dir."
+      ),
     },
   },
 }
@@ -100,6 +109,7 @@ async def run(
   bearer: str,
   client: ForgeServiceClient | None = None,
   vault_fs: VaultFS | None = None,
+  vault_registry: VaultRegistry | None = None,
 ) -> dict[str, Any]:
   """Execute the tool. Returns the MCP tool-result shape.
 
@@ -114,10 +124,16 @@ async def run(
 
   `vault_fs` param is a dependency injection seam for tests (per drain
   §5 tests). Production callers pass None → construct from env.
+
+  `vault_registry` param supersedes `vault_fs` for multi-vault dispatch
+  (CW-MCP-multi-vault-create-dir): when provided, `arguments['vault']`
+  is resolved through the registry. If both are None, fall back to the
+  legacy single-vault env-based construction (backwards-compat).
   """
   source = arguments.get("source")
   note_id = arguments.get("note_id")
   expected_version = arguments.get("expected_version")
+  vault_name = arguments.get("vault")
 
   # Drain §5 test #5 — missing/malformed note_id (tool-input validation
   # BEFORE any fs touching).
@@ -137,18 +153,25 @@ async def run(
       note_id=note_id,
     )
 
-  # Construct VaultFS from env unless the caller injected one. Env-based
-  # errors (path missing) surface as isError so the driver sees a clean
-  # message instead of a 500.
+  # Resolve target vault. Priority:
+  #   1. Explicit vault_fs injection (tests, backwards-compat).
+  #   2. vault_registry.get(vault_name) — multi-vault dispatch.
+  #   3. Fall back to env-based single-vault construction.
   if vault_fs is None:
-    try:
-      vault_fs = VaultFS(root=_vault_root_from_env())
-    except VaultFSError as exc:
-      return _error(
-        f"Vault filesystem unavailable: {exc}. Set FORGE_VAULT_PATH to "
-        "an existing vault directory in the forge-mcp environment.",
-        note_id=note_id,
-      )
+    if vault_registry is not None:
+      try:
+        vault_fs = vault_registry.get(vault_name)
+      except VaultNotFoundError as exc:
+        return _error(str(exc), note_id=note_id)
+    else:
+      try:
+        vault_fs = VaultFS(root=_vault_root_from_env())
+      except VaultFSError as exc:
+        return _error(
+          f"Vault filesystem unavailable: {exc}. Set FORGE_VAULT_PATH to "
+          "an existing vault directory in the forge-mcp environment.",
+          note_id=note_id,
+        )
 
   # Drain §5 test #6 — traversal defense fires HERE.
   try:

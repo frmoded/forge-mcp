@@ -227,15 +227,22 @@ async def test_get_run_result_wire_shape_no_double_wrap(server):
 
 
 @pytest.mark.asyncio
-async def test_read_notes_in_vault_wire_shape_no_double_wrap(server, tmp_path, monkeypatch):
+async def test_read_notes_in_vault_wire_shape_no_double_wrap(tmp_path, monkeypatch):
   """Drain §5 test #5 — read_notes_in_vault returns flat structuredContent.
 
   Post-CW-MCP-2-E this tool reads locally, not via HTTP — point
   FORGE_VAULT_PATH at an empty tmp dir so the walker finds nothing
-  (an empty-notes result is still success)."""
+  (an empty-notes result is still success).
+
+  CW-MCP-multi-vault-create-dir: the VaultRegistry snapshots the env at
+  server-construction time, so the env-patch must happen BEFORE the
+  server is built. Test constructs its own server after setenv rather
+  than relying on the shared `server` fixture."""
   vault = tmp_path / "wire-shape-vault"
   vault.mkdir()
   monkeypatch.setenv("FORGE_VAULT_PATH", str(vault))
+  monkeypatch.setenv("FORGE_MCP_BEARER", "test-token-wire-shape")
+  server = _make_server()
   tool = _tool(server, "forge_read_notes_in_vault")
   result = await tool.run(
     arguments={},

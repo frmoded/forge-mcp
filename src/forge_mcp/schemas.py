@@ -242,6 +242,52 @@ class CommitResult(BaseModel):
 
 
 # -----------------------------------------------------------------------------
+# Multi-vault + create (CW-MCP-multi-vault-create-dir)
+# -----------------------------------------------------------------------------
+
+
+class VaultEntry(BaseModel):
+  """A registered vault as returned by forge_list_vaults."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  name: str = Field(..., description="Vault name (from FORGE_VAULTS env).")
+  path: str = Field(..., description="Absolute path to the vault root.")
+  note_count: int = Field(
+    ..., ge=0, description="Number of .md notes discovered in the vault."
+  )
+
+
+class ListVaultsResult(BaseModel):
+  """Result envelope for forge_list_vaults."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vaults: list[VaultEntry] = Field(default_factory=list)
+
+
+class CreateDirectoryResult(BaseModel):
+  """Result envelope for forge_create_directory."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault name the directory was created in.")
+  path: str = Field(..., description="Vault-relative path of the created directory.")
+  absolute_path: str = Field(..., description="Absolute filesystem path.")
+
+
+class CreateNoteResult(BaseModel):
+  """Result envelope for forge_create_note."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault name the note was created in.")
+  note_id: str = Field(..., description="Vault-relative note identifier (stem path).")
+  path: str = Field(..., description="Vault-relative path of the created .md file.")
+  absolute_path: str = Field(..., description="Absolute filesystem path.")
+
+
+# -----------------------------------------------------------------------------
 # Error envelope
 # -----------------------------------------------------------------------------
 
