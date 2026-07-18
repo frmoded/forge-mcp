@@ -43,12 +43,14 @@ from .tools import (
   compile_recipe,
   create_directory,
   create_note,
+  delete_note,
   get_run_result,
   list_vaults,
   read_note,
   read_note_catalog,
   read_notes_in_vault,
   register_vault,
+  rename_note,
   run_recipe,
   unregister_vault,
 )
@@ -370,6 +372,54 @@ def _make_server(
     if vault is not None:
       args["vault"] = vault
     result = await create_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=rename_note.TOOL_NAME,
+    description=rename_note.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_rename_note(
+    ctx: Context,
+    old_note_id: str,
+    new_note_id: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {
+      "old_note_id": old_note_id,
+      "new_note_id": new_note_id,
+    }
+    if vault is not None:
+      args["vault"] = vault
+    result = await rename_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=delete_note.TOOL_NAME,
+    description=delete_note.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_delete_note(
+    ctx: Context,
+    note_id: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"note_id": note_id}
+    if vault is not None:
+      args["vault"] = vault
+    result = await delete_note.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)

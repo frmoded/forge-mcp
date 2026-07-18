@@ -342,6 +342,34 @@ class ReadNoteResult(BaseModel):
   note: NoteContent = Field(..., description="Parsed content of the requested note.")
 
 
+class RenameNoteResult(BaseModel):
+  """Result envelope for forge_rename_note (CW-MCP-rename-delete-note)."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault the note lives in.")
+  old_note_id: str = Field(..., description="The prior note identifier.")
+  new_note_id: str = Field(..., description="The new note identifier.")
+  new_path: str = Field(..., description="Vault-relative path of the renamed .md file.")
+  absolute_path: str = Field(..., description="Absolute filesystem path.")
+  git_tracked: bool = Field(
+    ..., description="True if the vault is git-tracked (git mv used); False for plain rename."
+  )
+
+
+class DeleteNoteResult(BaseModel):
+  """Result envelope for forge_delete_note (CW-MCP-rename-delete-note)."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault the note was in.")
+  note_id: str = Field(..., description="The deleted note identifier.")
+  path: str = Field(..., description="Vault-relative path of the removed .md file.")
+  git_tracked: bool = Field(
+    ..., description="True if the vault is git-tracked (git rm used); False for plain unlink."
+  )
+
+
 class RegisterVaultResult(BaseModel):
   """Result envelope for forge_register_vault (runtime registration).
 

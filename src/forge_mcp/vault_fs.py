@@ -673,6 +673,76 @@ class VaultFS:
     _atomic_write(path, content)
     return path
 
+  # -- Rename / delete (CW-MCP-rename-delete-note) --------------------------
+
+  def rename_note(self, old_note_id: str, new_note_id: str) -> Path:
+    """Rename a note within this vault.
+
+    Both note_ids validated via `note_path` (path-traversal defense,
+    hidden-segment reject, symlink escape reject). If the vault is
+    git-tracked, uses `git mv` to preserve history; else plain
+    `Path.rename`. Parent dirs for `new_note_id` are created if
+    absent.
+
+    Raises NoteNotFound if `old_note_id` doesn't resolve to a file.
+    Raises NoteExists if `new_note_id` already resolves to a file.
+    Raises NoteIdInvalid on traversal / shape violations of either id.
+    """
+    old_path = self.note_path(old_note_id)
+    new_path = self.note_path(new_note_id)
+    if not old_path.is_file():
+      raise NoteNotFound(f"note {old_note_id!r} not found at {old_path}")
+    if new_path.exists():
+      raise NoteExists(new_note_id, new_path)
+    new_path.parent.mkdir(parents=True, exist_ok=True)
+    if _is_git_tracked(self.root):
+      rel_old = old_path.relative_to(self.root)
+      rel_new = new_path.relative_to(self.root)
+      try:
+        subprocess.run(
+          ["git", "-C", str(self.root), "mv", str(rel_old), str(rel_new)],
+          capture_output=True, text=True, check=True,
+        )
+      except subprocess.CalledProcessError as exc:
+        raise VaultFSError(
+          f"git mv failed for {old_note_id!r} → {new_note_id!r}: "
+          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
+        ) from exc
+    else:
+      old_path.rename(new_path)
+    return new_path
+
+  def delete_note(self, note_id: str) -> Path:
+    """Delete a note from this vault.
+
+    Path validated via `note_path`. If the vault is git-tracked, uses
+    `git rm` (stages the removal for the caller's next commit); else
+    plain `Path.unlink`.
+
+    Raises NoteNotFound if the note doesn't exist.
+    Raises NoteIdInvalid on traversal / shape violations.
+    Returns the vault-relative path that was removed (for the caller's
+    result envelope).
+    """
+    path = self.note_path(note_id)
+    if not path.is_file():
+      raise NoteNotFound(f"note {note_id!r} not found at {path}")
+    if _is_git_tracked(self.root):
+      rel = path.relative_to(self.root)
+      try:
+        subprocess.run(
+          ["git", "-C", str(self.root), "rm", "--", str(rel)],
+          capture_output=True, text=True, check=True,
+        )
+      except subprocess.CalledProcessError as exc:
+        raise VaultFSError(
+          f"git rm failed for {note_id!r}: "
+          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
+        ) from exc
+    else:
+      path.unlink()
+    return path
+
   # -- Listing (for forge_read_notes_in_vault) ------------------------------
 
   def list_notes(self, filter: str | None = None) -> list[dict]:
