@@ -446,3 +446,165 @@ class TestCommitRecipeTool:
         )
     assert result["isError"] is False
     assert result["structuredContent"]["run_id"] == "deadbeef1234"
+
+
+# ---------------------------------------------------------------------------
+# CW-MCP-commit-message-param — optional `message` argument
+# ---------------------------------------------------------------------------
+
+
+def _last_commit_subject(root: Path) -> str:
+  """Read the most recent git commit subject line."""
+  return subprocess.run(
+    ["git", "-C", str(root), "log", "-1", "--format=%s"],
+    capture_output=True, text=True, check=True,
+  ).stdout.strip()
+
+
+class TestCommitMessageParam:
+  """Drain CW-MCP-commit-message-param — see prompt for spec.
+
+  These exercise vault_fs.commit_recipe directly (git subprocess is
+  driven); the tool layer is a thin pass-through around it.
+  """
+
+  def test_uses_provided_message(self, git_vault_root: Path):
+    """§5 test #1 — caller-supplied message shows up as the git subject.
+    The ` v{new_version}` suffix is APPENDED (invariant for
+    read_recipe_version)."""
+    fs = VaultFS(root=git_vault_root)
+    new_version, sha = fs.commit_recipe(
+      note_id="seed",
+      new_recipe_body="Return 42.",
+      expected_version=1,
+      git_message="authored by forge-wizard: hello_world scaffold test",
+    )
+    assert sha is not None
+    subject = _last_commit_subject(git_vault_root)
+    # Prefix preserved verbatim → grep-locatable by driver / wizard log.
+    assert subject.startswith("authored by forge-wizard: hello_world scaffold test")
+    # Suffix appended so read_recipe_version can find the commit later.
+    assert subject.endswith(f"v{new_version}")
+
+  def test_falls_back_to_auto_message_when_absent(self, git_vault_root: Path):
+    """§5 test #2 — no `message` argument → the drain-1225 auto-generated
+    shape `forge-mcp: commit recipe <note_id> v<N>` is used."""
+    fs = VaultFS(root=git_vault_root)
+    new_version, _ = fs.commit_recipe(
+      note_id="seed",
+      new_recipe_body="Return 100.",
+      expected_version=1,
+    )
+    subject = _last_commit_subject(git_vault_root)
+    assert subject == f"forge-mcp: commit recipe seed v{new_version}"
+
+  def test_message_already_ending_with_vN_not_double_stamped(
+    self, git_vault_root: Path,
+  ):
+    """Robustness: a caller that already ends their message with `v{n}`
+    doesn't get a second suffix stapled on. Empirically important for
+    idempotent replays."""
+    fs = VaultFS(root=git_vault_root)
+    new_version, _ = fs.commit_recipe(
+      note_id="seed",
+      new_recipe_body="Return 7.",
+      expected_version=1,
+      git_message=f"custom shape v{2}",  # `2` will be new_version too
+    )
+    assert new_version == 2
+    subject = _last_commit_subject(git_vault_root)
+    assert subject == "custom shape v2"
+    assert subject.count(" v") == 1
+
+  @pytest.mark.asyncio
+  async def test_tool_layer_threads_message_through(
+    self, git_vault_root: Path,
+  ):
+    """§5 test #1 through the tool layer — the tool accepts `message`
+    and it reaches git."""
+    fs = VaultFS(root=git_vault_root)
+    async with respx.mock(base_url="http://localhost:8000") as mock:
+      mock.post("/run").mock(
+        return_value=httpx.Response(200, json={
+          "parse_status": "ok",
+          "run_id": "runsha_msg",
+          "exit_code": 0,
+          "duration_ms": 1,
+          "timed_out": False,
+          "stdout_preview": "",
+          "artifacts": [],
+        })
+      )
+      async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+        result = await commit_recipe.run(
+          arguments={
+            "source": "Return 42.",
+            "note_id": "seed",
+            "expected_version": 1,
+            "message": "authored by forge-wizard: topic-X",
+          },
+          bearer="tok",
+          client=client,
+          vault_fs=fs,
+        )
+    assert result["isError"] is False
+    subject = _last_commit_subject(git_vault_root)
+    assert subject.startswith("authored by forge-wizard: topic-X")
+    assert subject.endswith("v2")
+
+  @pytest.mark.asyncio
+  async def test_rejects_message_with_newline(self, vault_root: Path):
+    """§5 test #3 (stretch) — newline in `message` returns clean isError
+    with no commit or fs mutation."""
+    fs = VaultFS(root=vault_root)
+    result = await commit_recipe.run(
+      arguments={
+        "source": "Return 1.",
+        "note_id": "notes/seed",
+        "expected_version": 0,
+        "message": "line one\nline two",
+      },
+      bearer="tok",
+      vault_fs=fs,
+    )
+    assert result["isError"] is True
+    text = result["content"][0]["text"].lower()
+    assert "newline" in text or "single line" in text
+    # And the seed note is untouched (Recipe body preserved).
+    assert "Return 1." in (vault_root / "notes" / "seed.md").read_text()
+
+  @pytest.mark.asyncio
+  async def test_empty_message_falls_through_to_auto(
+    self, git_vault_root: Path,
+  ):
+    """A message of just whitespace is treated as absent (fall-through
+    to the auto-generated shape). Common footgun when a caller passes
+    an unfilled template."""
+    fs = VaultFS(root=git_vault_root)
+    async with respx.mock(base_url="http://localhost:8000") as mock:
+      mock.post("/run").mock(
+        return_value=httpx.Response(200, json={
+          "parse_status": "ok",
+          "run_id": "runsha_empty",
+          "exit_code": 0,
+          "duration_ms": 1,
+          "timed_out": False,
+          "stdout_preview": "",
+          "artifacts": [],
+        })
+      )
+      async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+        result = await commit_recipe.run(
+          arguments={
+            "source": "Return 1.",
+            "note_id": "seed",
+            "expected_version": 1,
+            "message": "   ",
+          },
+          bearer="tok",
+          client=client,
+          vault_fs=fs,
+        )
+    assert result["isError"] is False
+    subject = _last_commit_subject(git_vault_root)
+    assert subject.startswith("forge-mcp: commit recipe seed")

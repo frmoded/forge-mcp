@@ -584,7 +584,19 @@ class VaultFS:
 
     git_sha: str | None = None
     if _is_git_tracked(self.root):
-      message = git_message or f"forge-mcp: commit recipe {note_id} v{new_version}"
+      # CW-MCP-commit-message-param: caller-supplied messages must still
+      # end with `v{new_version}` so `read_recipe_version` can grep the
+      # git log by subject-suffix. If the caller included it, respect
+      # verbatim; otherwise append.
+      suffix = f"v{new_version}"
+      if git_message:
+        message = (
+          git_message
+          if git_message.rstrip().endswith(suffix)
+          else f"{git_message} {suffix}"
+        )
+      else:
+        message = f"forge-mcp: commit recipe {note_id} {suffix}"
       git_sha = _git_commit_file(self.root, path, message)
 
     return new_version, git_sha
@@ -651,8 +663,15 @@ class VaultFS:
     return candidate
 
   def create_note_shell(self, note_id: str, description: str = "") -> Path:
-    """Create a fresh note with minimal frontmatter + optional Description.
-    NO Recipe facet — that's commit_recipe's job.
+    """Create a fresh note with proper V2a frontmatter + optional
+    Description. NO Recipe facet — that's commit_recipe's job.
+
+    CW-create-note-shell-v2a-frontmatter — writes the canonical V2a
+    frontmatter fields (`type: action`, `inputs: []`, `recipe_version:
+    0`) so the plugin's editor-attribute facet detects the note as a
+    Forge action note (via `type: action`), and so that a subsequent
+    `commit_recipe` call's `splice_recipe` can merge the version stamp
+    in-place instead of prepending a duplicate frontmatter block.
 
     Fails cleanly if the note already exists (raises NoteExists). Does
     NOT overwrite. If the parent directory doesn't exist, it is created
@@ -663,12 +682,22 @@ class VaultFS:
     path = self.note_path(note_id)
     if path.exists():
       raise NoteExists(note_id, path)
-    # Minimal V2a shell: empty frontmatter + Description section.
     desc_body = description.strip()
+    # Canonical V2a shape — matches the plugin's `actionTemplate`
+    # (welcome-shape-classifier tests + modal.test.ts) and satisfies
+    # `parse_note`'s frontmatter recognition (which requires a non-
+    # empty block between the fences to find the closing `\n---`).
+    frontmatter_block = (
+      "---\n"
+      "type: action\n"
+      "inputs: []\n"
+      "recipe_version: 0\n"
+      "---\n"
+    )
     if desc_body:
-      content = f"---\n---\n\n# Description\n\n{desc_body}\n"
+      content = f"{frontmatter_block}\n# Description\n\n{desc_body}\n"
     else:
-      content = "---\n---\n\n# Description\n\n\n"
+      content = f"{frontmatter_block}\n# Description\n\n\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(path, content)
     return path

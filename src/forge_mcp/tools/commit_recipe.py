@@ -70,6 +70,21 @@ INPUT_SCHEMA: dict[str, Any] = {
         "CW-MCP-multi-vault-create-dir."
       ),
     },
+    "message": {
+      "type": ["string", "null"],
+      "description": (
+        "Optional git commit message. When provided, forge-mcp uses "
+        "it as the commit message, with a `v{new_version}` suffix "
+        "appended if not already present (the suffix is a load-"
+        "bearing invariant for the `forge-recipe:///{note_id}/v{n}` "
+        "resource resolver). When absent / null, falls back to the "
+        "auto-generated shape `forge-mcp: commit recipe {note_id} "
+        "v{new_version}`. Agent callers use this to apply "
+        "authorship conventions (e.g. wizard passes 'authored by "
+        "forge-wizard: <topic>'). Newlines are rejected. Trimmed."
+      ),
+      "maxLength": 500,
+    },
   },
 }
 
@@ -134,6 +149,7 @@ async def run(
   note_id = arguments.get("note_id")
   expected_version = arguments.get("expected_version")
   vault_name = arguments.get("vault")
+  message = arguments.get("message")
 
   # Drain §5 test #5 — missing/malformed note_id (tool-input validation
   # BEFORE any fs touching).
@@ -152,6 +168,25 @@ async def run(
       "'expected_version' must be an integer or omitted.",
       note_id=note_id,
     )
+  # Message sanity — reject newlines (would garble `git log --oneline` +
+  # the `subject.rstrip().endswith(vN)` version resolver at
+  # `vault_fs.read_recipe_version`). Trim leading/trailing whitespace.
+  # Empty-after-trim is treated as absent (fall through to auto).
+  if message is not None:
+    if not isinstance(message, str):
+      return _error(
+        "'message' must be a string or omitted.",
+        note_id=note_id,
+      )
+    if "\n" in message or "\r" in message:
+      return _error(
+        "'message' must not contain newline characters — commit "
+        "messages passed to git must be a single line.",
+        note_id=note_id,
+      )
+    message = message.strip()
+    if not message:
+      message = None
 
   # Resolve target vault. Priority:
   #   1. Explicit vault_fs injection (tests, backwards-compat).
@@ -175,14 +210,17 @@ async def run(
 
   # Drain §5 test #6 — traversal defense fires HERE.
   try:
-    # Let vault_fs generate the default git message — it includes the
-    # `v{new_version}` suffix that `read_recipe_version` grep-matches
-    # against when resolving `forge-recipe:///{note_id}/v{n}`. Passing a
-    # custom message would break the resource resolver's convention.
+    # CW-MCP-commit-message-param: pass the caller-supplied `message`
+    # through as `git_message`. When None, vault_fs generates the
+    # default `forge-mcp: commit recipe {note_id} v{n}`. When set,
+    # vault_fs uses it and appends ` v{new_version}` if not already
+    # ending in that suffix — preserves the resource-resolver invariant
+    # at `vault_fs.read_recipe_version` (subject.endswith(f'v{n}')).
     new_version, git_sha = vault_fs.commit_recipe(
       note_id=note_id,
       new_recipe_body=source,
       expected_version=expected_version,
+      git_message=message,
     )
   except NoteIdInvalid as exc:
     return _error(f"Invalid note_id: {exc}", note_id=note_id)

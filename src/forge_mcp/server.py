@@ -293,6 +293,7 @@ def _make_server(
     note_id: str,
     expected_version: int | None = None,
     vault: str | None = None,
+    message: str | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -303,6 +304,8 @@ def _make_server(
       args["expected_version"] = expected_version
     if vault is not None:
       args["vault"] = vault
+    if message is not None:
+      args["message"] = message
     result = await commit_recipe.run(
       arguments=args,
       bearer=bearer,
