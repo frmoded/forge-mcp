@@ -627,6 +627,10 @@ class VaultFS:
     python = facets.get("Python")
     data = facets.get("Data")
     inputs = _extract_inputs(parsed.frontmatter_dict, description)
+    # Drain 2026-07-23-1700 Phase 1 — surface `sync_state` from
+    # frontmatter for external observers (wizard / CC / CCQA / cohort
+    # scripts) that read note state without loading the plugin.
+    sync_state = parsed.frontmatter_dict.get("sync_state")
     return {
       "raw": raw,
       "frontmatter": dict(parsed.frontmatter_dict),
@@ -635,6 +639,7 @@ class VaultFS:
       "python": python,
       "data": data,
       "inputs": inputs,
+      "sync_state": sync_state,
     }
 
   # -- Directory + note creation (CW-MCP-multi-vault-create-dir) ------------
@@ -818,6 +823,7 @@ class VaultFS:
         continue
       has_recipe = False
       recipe_version: int | None = None
+      sync_state: str | None = None
       try:
         raw = path.read_text(encoding="utf-8")
         parsed = parse_note(raw)
@@ -828,6 +834,11 @@ class VaultFS:
             recipe_version = int(stamp)
           except ValueError:
             recipe_version = None
+        # Drain 2026-07-23-1700 Phase 1 — sync_state per note.
+        # str | None; whatever the plugin wrote (or None if absent).
+        raw_sync = parsed.frontmatter_dict.get("sync_state")
+        if isinstance(raw_sync, str):
+          sync_state = raw_sync
       except (OSError, UnicodeDecodeError):
         # Unreadable file (permission, binary content mislabeled as
         # .md) — surface as unparseable, don't fail the listing.
@@ -838,6 +849,7 @@ class VaultFS:
         "path": str(rel),
         "has_recipe": has_recipe,
         "recipe_version": recipe_version,
+        "sync_state": sync_state,
       })
     entries.sort(key=lambda e: e["note_id"])
     return entries

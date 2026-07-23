@@ -100,6 +100,21 @@ class VaultNoteEntry(BaseModel):
       "stamp is absent (never committed via forge_commit_recipe)."
     ),
   )
+  sync_state: str | None = Field(
+    None,
+    description=(
+      "S9 sync_state frontmatter field (drain 2026-07-23-1700 Phase 1). "
+      "Note-level rollup of facet-freshness relationships, populated by "
+      "the plugin on facet-change lifecycle events. Typed as `str | None` "
+      "rather than Literal so the MCP layer surfaces whatever the plugin "
+      "writes (including future Phase 2 state additions) without erroring. "
+      "Recognized values today: `synced` | `stale-recipe` | `stale-python` "
+      "| `stale-both`. `authoring` is computed-only inside the plugin "
+      "(never persisted per drain 1700 Proposal B). None when the field "
+      "is absent (pre-Phase-1 note not yet touched by the plugin); "
+      "callers should treat None as 'unknown' and NOT infer 'synced'."
+    ),
+  )
 
 
 class VaultListResult(BaseModel):
@@ -331,6 +346,17 @@ class NoteContent(BaseModel):
   )
   raw: str = Field(
     ..., description="Full markdown source, verbatim."
+  )
+  sync_state: str | None = Field(
+    None,
+    description=(
+      "S9 sync_state frontmatter field (drain 2026-07-23-1700 Phase 1). "
+      "Note-level rollup of facet-freshness relationships. Typed as "
+      "`str | None` — surfaces whatever the plugin wrote (see the "
+      "matching field on VaultNoteEntry for value grammar). None when "
+      "the field is absent; callers should treat None as 'unknown' and "
+      "NOT infer 'synced'."
+    ),
   )
 
 

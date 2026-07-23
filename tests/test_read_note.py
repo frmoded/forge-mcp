@@ -256,3 +256,76 @@ async def test_normalizes_md_suffix(single_vault_registry: VaultRegistry):
   )
   assert result["isError"] is False
   assert result["structuredContent"]["note"]["note_id"] == "trailing"
+
+
+# ---- Drain 2026-07-23-1700 Phase 1 — sync_state exposure ----
+
+_NOTE_WITH_SYNC_STATE = """---
+type: action
+inputs: []
+recipe_version: 1
+source_facet: description
+sync_state: stale-recipe
+---
+
+# Description
+
+Body with a description edit that hasn't been re-derived yet.
+
+# Recipe
+
+Return "prior".
+"""
+
+_NOTE_WITHOUT_SYNC_STATE = """---
+type: action
+inputs: []
+recipe_version: 1
+source_facet: description
+---
+
+# Description
+
+Pre-drain-1700 note; the plugin hasn't seeded sync_state yet.
+
+# Recipe
+
+Return "hi".
+"""
+
+
+@pytest.mark.asyncio
+async def test_read_note_returns_sync_state(
+  single_vault_registry: VaultRegistry,
+):
+  """Drain 1700 §5 test #1 — sync_state present in frontmatter surfaces
+  on NoteContent."""
+  vault_fs = single_vault_registry.get()
+  _write(vault_fs.root, "stale_desc", _NOTE_WITH_SYNC_STATE)
+  result = await read_note.run(
+    arguments={"note_id": "stale_desc"},
+    bearer="tok",
+    vault_registry=single_vault_registry,
+  )
+  assert result["isError"] is False
+  note = result["structuredContent"]["note"]
+  assert note["sync_state"] == "stale-recipe"
+
+
+@pytest.mark.asyncio
+async def test_read_note_missing_sync_state(
+  single_vault_registry: VaultRegistry,
+):
+  """Drain 1700 §5 test #2 — sync_state absent from frontmatter → None
+  on NoteContent. Callers must treat None as 'unknown' and NOT infer
+  'synced'."""
+  vault_fs = single_vault_registry.get()
+  _write(vault_fs.root, "pre_drain", _NOTE_WITHOUT_SYNC_STATE)
+  result = await read_note.run(
+    arguments={"note_id": "pre_drain"},
+    bearer="tok",
+    vault_registry=single_vault_registry,
+  )
+  assert result["isError"] is False
+  note = result["structuredContent"]["note"]
+  assert note["sync_state"] is None

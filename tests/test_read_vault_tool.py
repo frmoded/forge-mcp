@@ -145,8 +145,12 @@ class TestReadNotesInVaultTool:
     notes = result["structuredContent"]["notes"]
     assert len(notes) == 3
     # Every returned entry must be reshaped correctly.
+    # `sync_state` added in drain 2026-07-23-1700 Phase 1; None for
+    # these fixture notes which don't carry the frontmatter field.
     for entry in notes:
-      assert set(entry.keys()) == {"note_id", "name", "path", "has_recipe", "recipe_version"}
+      assert set(entry.keys()) == {
+        "note_id", "name", "path", "has_recipe", "recipe_version", "sync_state",
+      }
 
   @pytest.mark.asyncio
   async def test_tool_empty_vault_returns_empty_success(self, empty_vault: Path):
@@ -215,3 +219,56 @@ class TestVaultNoteEntrySchema:
         source_facet="recipe",  # type: ignore[call-arg]
         latest_recipe_version=1,  # type: ignore[call-arg]
       )
+
+  # ---- Drain 2026-07-23-1700 Phase 1 — sync_state on VaultNoteEntry ----
+
+  def test_sync_state_default_is_none(self):
+    """New sync_state field defaults to None when not provided —
+    matches the "field absent from frontmatter" case per drain 1700."""
+    entry = VaultNoteEntry(
+      note_id="foo", name="foo", path="foo.md", has_recipe=False,
+    )
+    assert entry.sync_state is None
+
+  def test_sync_state_accepts_known_value(self):
+    entry = VaultNoteEntry(
+      note_id="foo", name="foo", path="foo.md", has_recipe=False,
+      sync_state="stale-recipe",
+    )
+    assert entry.sync_state == "stale-recipe"
+
+  def test_sync_state_accepts_unknown_value(self):
+    """Typed as str | None (NOT Literal) so future Phase 2 states
+    surface without erroring. Matches drain 1700 §4 B.4 rationale."""
+    entry = VaultNoteEntry(
+      note_id="foo", name="foo", path="foo.md", has_recipe=False,
+      sync_state="future-phase-2-state",
+    )
+    assert entry.sync_state == "future-phase-2-state"
+
+
+# ---------------------------------------------------------------------------
+# Drain 2026-07-23-1700 Phase 1 — list_notes surfaces sync_state
+# ---------------------------------------------------------------------------
+
+
+class TestListNotesSyncState:
+  """VaultFS.list_notes must populate sync_state from frontmatter for
+  each note (or None when absent)."""
+
+  def test_list_notes_returns_sync_state_when_present(self, tmp_path: Path):
+    root = tmp_path / "vault"
+    _write(root / "stale.md", (
+      "---\ntype: action\nrecipe_version: 1\n"
+      "sync_state: stale-recipe\n---\n\n"
+      "# Description\n\nx\n\n# Recipe\n\nReturn 1.\n"
+    ))
+    _write(root / "pre_drain.md", (
+      "---\ntype: action\n---\n\n"
+      "# Description\n\ny\n"
+    ))
+    vault_fs = VaultFS(root=root)
+    entries = vault_fs.list_notes()
+    by_id = {e["note_id"]: e for e in entries}
+    assert by_id["stale"]["sync_state"] == "stale-recipe"
+    assert by_id["pre_drain"]["sync_state"] is None

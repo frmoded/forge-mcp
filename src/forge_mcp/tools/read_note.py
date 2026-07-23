@@ -143,6 +143,7 @@ async def run(
     data=content["data"],
     inputs=content["inputs"],
     raw=content["raw"],
+    sync_state=content.get("sync_state"),
   )
   result = ReadNoteResult(note=note_content)
   facet_summary = []
