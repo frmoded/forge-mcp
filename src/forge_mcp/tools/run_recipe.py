@@ -35,6 +35,22 @@ INPUT_SCHEMA: dict[str, Any] = {
         "(e.g. ['music'], ['moda']). Defaults to ['music'] when omitted."
       ),
     },
+    # Drain 2026-07-21-1405 — wizard slot-resolve wire-through.
+    # Optional map of slot-id -> resolved Python snippet, spliced into
+    # each `{{ prose }}` slot's location before sandbox execution.
+    # See forge-transpile drain 1700 for the slot-resolve contract and
+    # forge-transpile drain 1600 for the sandbox hardening that makes
+    # accepting agent-authored snippets safe (QA-1700 GREEN as of
+    # forge-transpile SHA f5dd9f4).
+    "resolve_slot": {
+      "type": "object",
+      "additionalProperties": {"type": "string"},
+      "description": (
+        "Optional map of slot-id -> resolved Python snippet. Splices "
+        "each snippet into its slot location before sandbox execution. "
+        "Omit for recipes with no slots."
+      ),
+    },
   },
 }
 
@@ -74,7 +90,9 @@ DESCRIPTION = (
   "Compile + run an E-- Recipe in a resource-limited server sandbox. "
   "Returns a short preview + a run_id; call forge_get_run_result to fetch "
   "the full stdout/stderr + artifact manifest. Artifacts (MusicXML, MIDI, "
-  "PNGs) are accessible as forge-artifact:///{run_id}/{name} resources."
+  "PNGs) are accessible as forge-artifact:///{run_id}/{name} resources. "
+  "Optional `resolve_slot` maps slot-id to resolved Python for recipes "
+  "with `{{ }}` slots; omit when the recipe has no slots."
 )
 
 
@@ -135,6 +153,19 @@ async def run(
   else:
     domains = ["music"]
 
+  # Drain 2026-07-21-1405 — resolve_slot wire-through. Sanitize on the
+  # tool boundary so a malformed shape from an off-day agent inference
+  # doesn't 422 the request or reach the sandbox. Silent drop-to-None
+  # matches the domains-handling pattern above and the drain §4
+  # rationale (degrade-to-placeholder over hard error).
+  raw_rs = arguments.get("resolve_slot")
+  if isinstance(raw_rs, dict) and all(
+    isinstance(k, str) and isinstance(v, str) for k, v in raw_rs.items()
+  ):
+    resolve_slot: dict[str, str] | None = raw_rs
+  else:
+    resolve_slot = None
+
   owns_client = client is None
   if client is None:
     client = ForgeServiceClient()
@@ -144,6 +175,7 @@ async def run(
     try:
       result: RunResult = await client.run_recipe(
         source=source, bearer=bearer, domains=domains,
+        resolve_slot=resolve_slot,
       )
     except ForgeServiceEndpointMissing as exc:
       return {

@@ -173,3 +173,160 @@ async def test_run_recipe_defaults_domains_to_music() -> None:
   assert route.called
   sent = _json.loads(route.calls.last.request.content)
   assert sent["domains"] == ["music"]
+
+
+# ---------------------------------------------------------------------------
+# Drain 2026-07-21-1405 — resolve_slot wire-through (Track B).
+#
+# forge-transpile drain 1700 shipped an optional `resolve_slot` field on
+# POST /run for splicing wizard-resolved Python into E-- `{{ prose }}`
+# code slots. This drain teaches forge-mcp to surface + forward that
+# field so an agent driving via `forge_run_recipe` can actually reach
+# the codepath. QA-1700 is now GREEN (forge-transpile SHA f5dd9f4) so
+# the wire-through is safe to enable.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_recipe_without_resolve_slot_omits_field_from_body() -> None:
+  """Back-compat: existing callers keep seeing exactly {source, domains}
+  on the wire. `resolve_slot` MUST NOT appear when absent/null/empty."""
+  import json as _json
+
+  route = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await run_recipe.run(
+      arguments={"source": _TRIVIAL},
+      bearer="tok", client=client,
+    )
+  assert route.called
+  sent = _json.loads(route.calls.last.request.content)
+  assert "resolve_slot" not in sent, (
+    f"resolve_slot should be absent when not supplied; body was {sent!r}"
+  )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_recipe_with_resolve_slot_passes_it_through() -> None:
+  """A well-formed `resolve_slot` lands on the outbound body verbatim."""
+  import json as _json
+
+  route = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await run_recipe.run(
+      arguments={
+        "source": _TRIVIAL,
+        "resolve_slot": {"slot_0": "return 42"},
+      },
+      bearer="tok", client=client,
+    )
+  assert route.called
+  sent = _json.loads(route.calls.last.request.content)
+  assert sent.get("resolve_slot") == {"slot_0": "return 42"}, (
+    f"resolve_slot missing or malformed in body: {sent!r}"
+  )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_run_recipe_with_malformed_resolve_slot_drops_to_none() -> None:
+  """Malformed shapes → silently drop to None (matches domains-handling
+  pattern at run_recipe.py:132-136). Sanitization is intentional per
+  drain §4: agent's inference is capable of producing bad JSON on bad
+  days; degrade-to-placeholder beats hard error."""
+  import json as _json
+
+  # Case A: not a dict at all.
+  route_a = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await run_recipe.run(
+      arguments={"source": _TRIVIAL, "resolve_slot": "not a dict"},
+      bearer="tok", client=client,
+    )
+  assert route_a.called
+  sent_a = _json.loads(route_a.calls.last.request.content)
+  assert "resolve_slot" not in sent_a, (
+    f"non-dict resolve_slot should be dropped; body was {sent_a!r}"
+  )
+  respx.reset()
+
+  # Case B: dict, but a value is non-string (int).
+  route_b = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await run_recipe.run(
+      arguments={"source": _TRIVIAL, "resolve_slot": {"slot_0": 42}},
+      bearer="tok", client=client,
+    )
+  assert route_b.called
+  sent_b = _json.loads(route_b.calls.last.request.content)
+  assert "resolve_slot" not in sent_b, (
+    f"dict-with-non-string-value resolve_slot should be dropped; "
+    f"body was {sent_b!r}"
+  )
+
+
+def test_run_recipe_input_schema_declares_resolve_slot() -> None:
+  """INPUT_SCHEMA must describe resolve_slot so MCP clients (and any
+  schema-filtering dispatcher) know it's a valid input field."""
+  props = run_recipe.INPUT_SCHEMA["properties"]
+  assert "resolve_slot" in props, (
+    f"resolve_slot missing from INPUT_SCHEMA properties: {list(props.keys())}"
+  )
+  rs = props["resolve_slot"]
+  assert rs["type"] == "object"
+  # additionalProperties enforces string values in the map.
+  assert rs.get("additionalProperties") == {"type": "string"}, (
+    f"expected additionalProperties: {{type: string}}, got {rs!r}"
+  )
+  assert "description" in rs and rs["description"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_forge_service_client_run_recipe_body_shape_direct() -> None:
+  """Direct test on ForgeServiceClient.run_recipe (bypasses the tool
+  wrapper) — two subcases: without and with resolve_slot. Locks the
+  invariant that the client method itself, not just its caller, owns
+  the conditional-inclusion behavior."""
+  import json as _json
+
+  # Subcase 1: without resolve_slot → body has no such key.
+  route1 = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await client.run_recipe(source=_TRIVIAL, bearer="tok")
+  assert route1.called
+  sent1 = _json.loads(route1.calls.last.request.content)
+  assert sent1 == {"source": _TRIVIAL, "domains": ["music"]}, (
+    f"without resolve_slot, body must be exactly {{source, domains}}; "
+    f"got {sent1!r}"
+  )
+  respx.reset()
+
+  # Subcase 2: with resolve_slot → body includes the field.
+  route2 = respx.post("http://localhost:8000/run").mock(
+    return_value=httpx.Response(200, json=_mk_ok())
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    await client.run_recipe(
+      source=_TRIVIAL, bearer="tok",
+      resolve_slot={"slot_0": "return 42"},
+    )
+  assert route2.called
+  sent2 = _json.loads(route2.calls.last.request.content)
+  assert sent2 == {
+    "source": _TRIVIAL,
+    "domains": ["music"],
+    "resolve_slot": {"slot_0": "return 42"},
+  }, f"body shape mismatch: {sent2!r}"

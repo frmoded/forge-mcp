@@ -185,6 +185,7 @@ class ForgeServiceClient:
 
   async def run_recipe(
     self, source: str, bearer: str, domains: list[str] | None = None,
+    resolve_slot: dict[str, str] | None = None,
   ) -> RunResult:
     """Compile + execute an E-- Recipe in forge-transpile's sandbox.
 
@@ -197,9 +198,17 @@ class ForgeServiceClient:
     forge-transpile endpoint applies the same default when the field
     is omitted from the wire payload, but we send it explicitly here
     so the outbound request body always names the domain.
+
+    `resolve_slot` (drain 2026-07-21-1405) is an optional map of
+    slot-id -> resolved Python snippet, spliced into each `{{ }}`
+    slot before sandbox execution. Included in the wire body ONLY
+    when non-None + non-empty; back-compat callers that omit it
+    keep sending exactly `{source, domains}`.
     """
     url = f"{self._base_url}/run"
-    body = {"source": source, "domains": domains or ["music"]}
+    body: dict = {"source": source, "domains": domains or ["music"]}
+    if resolve_slot:
+      body["resolve_slot"] = resolve_slot
     client = await self._client_or_ephemeral()
     try:
       resp = await client.post(
