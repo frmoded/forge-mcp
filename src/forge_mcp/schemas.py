@@ -412,6 +412,25 @@ class RenameNoteResult(BaseModel):
   git_tracked: bool = Field(
     ..., description="True if the vault is git-tracked (git mv used); False for plain rename."
   )
+  # CW-forge-mcp-delete-and-rename-note-auto-commit (drain 2026-07-24-1500):
+  # git_sha + message populated only on git-tracked vaults where the
+  # source was tracked in HEAD (so `git mv` actually ran and could be
+  # committed). Untracked vaults + never-committed-source cases return
+  # None for both fields.
+  git_sha: str | None = Field(
+    default=None,
+    description=(
+      "40-char SHA of the auto-created rename commit, or null when the "
+      "vault is not git-tracked / the source was never committed."
+    ),
+  )
+  message: str | None = Field(
+    default=None,
+    description=(
+      "The commit message actually used (custom `message` arg, or the "
+      "default `rename note <old> → <new>`). Null when no commit was made."
+    ),
+  )
 
 
 class DeleteNoteResult(BaseModel):
@@ -424,6 +443,22 @@ class DeleteNoteResult(BaseModel):
   path: str = Field(..., description="Vault-relative path of the removed .md file.")
   git_tracked: bool = Field(
     ..., description="True if the vault is git-tracked (git rm used); False for plain unlink."
+  )
+  # CW-forge-mcp-delete-and-rename-note-auto-commit (drain 2026-07-24-1500):
+  # See RenameNoteResult for the None-when-no-commit-was-made semantics.
+  git_sha: str | None = Field(
+    default=None,
+    description=(
+      "40-char SHA of the auto-created delete commit, or null when the "
+      "vault is not git-tracked / the file was never committed."
+    ),
+  )
+  message: str | None = Field(
+    default=None,
+    description=(
+      "The commit message actually used (custom `message` arg, or the "
+      "default `delete note <note_id>`). Null when no commit was made."
+    ),
   )
 
 

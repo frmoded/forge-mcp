@@ -67,7 +67,11 @@ async def test_renames_note_happy_path(single_vault_registry: VaultRegistry):
 async def test_renames_note_in_git_vault_uses_git_mv(
   git_vault_registry: VaultRegistry,
 ):
-  """§5 test #2 — git-tracked vault: git mv leaves the rename staged."""
+  """§5 test #2 — git-tracked vault: git mv + auto-commit
+  (drain 2026-07-24-1500). Prior contract left the rename staged; the
+  drain flipped it to `git mv` + immediate `git commit`, returning the
+  SHA.
+  """
   await _make_note(git_vault_registry, "sketchpad", "scratch")
   # Commit initial so `git mv` has something to move in HEAD.
   vault_fs = git_vault_registry.get()
@@ -82,17 +86,26 @@ async def test_renames_note_in_git_vault_uses_git_mv(
     vault_registry=git_vault_registry,
   )
   assert result["isError"] is False
-  assert result["structuredContent"]["git_tracked"] is True
-  # `git status --porcelain` should show the rename staged.
+  sc = result["structuredContent"]
+  assert sc["git_tracked"] is True
+  # Working tree should be CLEAN — the rename was committed, not staged.
   status = subprocess.run(
     ["git", "status", "--porcelain"],
     cwd=vault_fs.root, check=True, capture_output=True, text=True,
   ).stdout
-  # `R` prefix indicates a staged rename.
-  assert "R" in status.split("\n")[0]
-  assert "hello_world.md" in status
+  assert status == "", f"expected clean tree, got: {status!r}"
   assert not (vault_fs.root / "sketchpad.md").exists()
   assert (vault_fs.root / "hello_world.md").is_file()
+  # git_sha is a real HEAD commit that touches both old and new paths.
+  git_sha = sc["git_sha"]
+  assert isinstance(git_sha, str) and len(git_sha) == 40, git_sha
+  show = subprocess.run(
+    ["git", "show", "--name-only", "--pretty=format:%H", git_sha],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert git_sha in show
+  assert "hello_world.md" in show
+  assert sc["message"] == "rename note sketchpad → hello_world"
 
 
 @pytest.mark.asyncio
@@ -253,11 +266,105 @@ async def test_rename_note_handles_dirty_working_tree(
     "instead of being discarded"
   )
 
-  # Git status should show a staged rename (or add/delete pair).
+  # Drain 2026-07-24-1500: rename now auto-commits — tree is clean.
   post_status = subprocess.run(
     ["git", "status", "--porcelain"],
     cwd=vault_fs.root, check=True, capture_output=True, text=True,
   ).stdout
-  assert "new_name.md" in post_status, (
-    f"expected new_name.md in git status, got: {post_status!r}"
+  assert post_status == "", f"expected clean tree, got: {post_status!r}"
+  git_sha = result["structuredContent"]["git_sha"]
+  assert isinstance(git_sha, str) and len(git_sha) == 40, git_sha
+
+
+# -- CW-forge-mcp-delete-and-rename-note-auto-commit (drain 2026-07-24-1500) --
+
+
+@pytest.mark.asyncio
+async def test_rename_note_path_scoped_commit_ignores_unrelated_staged_changes(
+  git_vault_registry: VaultRegistry,
+):
+  """§5 acceptance #2 mirror — rename auto-commit is path-scoped."""
+  await _make_note(git_vault_registry, "target", "target body")
+  await _make_note(git_vault_registry, "bystander", "bystander body")
+  vault_fs = git_vault_registry.get()
+  subprocess.run(["git", "add", "-A"], cwd=vault_fs.root, check=True)
+  subprocess.run(
+    ["git", "commit", "-q", "-m", "seed"], cwd=vault_fs.root, check=True
   )
+  # Stage an unrelated change on the bystander note.
+  bystander = vault_fs.root / "bystander.md"
+  bystander.write_text(
+    bystander.read_text(encoding="utf-8") + "\nunrelated edit\n",
+    encoding="utf-8",
+  )
+  subprocess.run(
+    ["git", "add", "bystander.md"], cwd=vault_fs.root, check=True
+  )
+
+  result = await rename_note.run(
+    arguments={"old_note_id": "target", "new_note_id": "renamed"},
+    bearer="tok",
+    vault_registry=git_vault_registry,
+  )
+  assert result["isError"] is False
+  git_sha = result["structuredContent"]["git_sha"]
+  assert isinstance(git_sha, str) and len(git_sha) == 40
+
+  # The auto-commit should touch ONLY the old + new paths. `--name-status`
+  # emits an R{score} row for renames (e.g. `R100\ttarget.md\trenamed.md`)
+  # OR when the similarity heuristic misses, two rows `D target.md` +
+  # `A renamed.md`. Either way, only those two filenames should appear —
+  # NEVER `bystander.md`.
+  status = subprocess.run(
+    ["git", "show", "--name-status", "--pretty=format:", git_sha],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout.strip().splitlines()
+  filenames = set()
+  for row in status:
+    if not row.strip():
+      continue
+    filenames.update(row.split("\t")[1:])
+  assert filenames == {"target.md", "renamed.md"}, (
+    f"expected commit to touch only target.md + renamed.md, "
+    f"got filenames={filenames}, raw status={status}"
+  )
+  assert "bystander.md" not in filenames
+  # Bystander's staged change remains staged.
+  status = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert "M  bystander.md" in status, (
+    f"expected bystander.md to remain staged, got: {status!r}"
+  )
+
+
+@pytest.mark.asyncio
+async def test_rename_note_custom_message_is_honoured(
+  git_vault_registry: VaultRegistry,
+):
+  """§5 acceptance #4 mirror — caller-supplied `message` overrides."""
+  await _make_note(git_vault_registry, "sketchpad", "scratch")
+  vault_fs = git_vault_registry.get()
+  subprocess.run(["git", "add", "-A"], cwd=vault_fs.root, check=True)
+  subprocess.run(
+    ["git", "commit", "-q", "-m", "seed"], cwd=vault_fs.root, check=True
+  )
+
+  result = await rename_note.run(
+    arguments={
+      "old_note_id": "sketchpad",
+      "new_note_id": "hello_world",
+      "message": "wizard: promote sketchpad → hello_world",
+    },
+    bearer="tok",
+    vault_registry=git_vault_registry,
+  )
+  assert result["isError"] is False
+  sc = result["structuredContent"]
+  assert sc["message"] == "wizard: promote sketchpad → hello_world"
+  subject = subprocess.run(
+    ["git", "log", "-1", "--pretty=format:%s", sc["git_sha"]],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert subject == "wizard: promote sketchpad → hello_world"

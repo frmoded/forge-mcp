@@ -61,7 +61,11 @@ async def test_deletes_note_happy_path(single_vault_registry: VaultRegistry):
 async def test_deletes_note_in_git_vault_uses_git_rm(
   git_vault_registry: VaultRegistry,
 ):
-  """§5 test #8 — git-tracked vault: git rm stages the deletion."""
+  """§5 test #8 — git-tracked vault: git rm + auto-commit
+  (drain 2026-07-24-1500). Prior contract left the deletion staged; the
+  drain flipped it to `git rm` + immediate `git commit`, returning the
+  SHA.
+  """
   await _make_note(git_vault_registry, "retire_me", "old body")
   vault_fs = git_vault_registry.get()
   # Commit initial so the file exists in HEAD.
@@ -76,16 +80,25 @@ async def test_deletes_note_in_git_vault_uses_git_rm(
     vault_registry=git_vault_registry,
   )
   assert result["isError"] is False
-  assert result["structuredContent"]["git_tracked"] is True
-  # File removed from disk; deletion is staged in git.
+  sc = result["structuredContent"]
+  assert sc["git_tracked"] is True
   assert not (vault_fs.root / "retire_me.md").exists()
+  # Working tree should be CLEAN — the deletion was committed, not staged.
   status = subprocess.run(
     ["git", "status", "--porcelain"],
     cwd=vault_fs.root, check=True, capture_output=True, text=True,
   ).stdout
-  # `D` on the left column = staged deletion.
-  assert status.startswith("D ") or "\nD " in status
-  assert "retire_me.md" in status
+  assert status == "", f"expected clean tree, got: {status!r}"
+  # git_sha is a real HEAD commit that touches retire_me.md.
+  git_sha = sc["git_sha"]
+  assert isinstance(git_sha, str) and len(git_sha) == 40, git_sha
+  show = subprocess.run(
+    ["git", "show", "--name-only", "--pretty=format:%H", git_sha],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert git_sha in show
+  assert "retire_me.md" in show
+  assert sc["message"] == "delete note retire_me"
 
 
 @pytest.mark.asyncio
@@ -179,12 +192,99 @@ async def test_delete_note_handles_dirty_working_tree(
   assert result["structuredContent"]["note_id"] == "dirty_note"
   assert result["structuredContent"]["path"] == "dirty_note.md"
   assert not note_path.exists()
+  # Drain 2026-07-24-1500: deletion now auto-commits — tree is clean.
   post_status = subprocess.run(
     ["git", "status", "--porcelain"],
     cwd=vault_fs.root, check=True, capture_output=True, text=True,
   ).stdout
-  # `D` on the left column = staged deletion.
-  assert post_status.startswith("D ") or "\nD " in post_status, (
-    f"expected staged deletion, got: {post_status!r}"
+  assert post_status == "", f"expected clean tree, got: {post_status!r}"
+  git_sha = result["structuredContent"]["git_sha"]
+  assert isinstance(git_sha, str) and len(git_sha) == 40, git_sha
+
+
+# -- CW-forge-mcp-delete-and-rename-note-auto-commit (drain 2026-07-24-1500) --
+
+
+@pytest.mark.asyncio
+async def test_delete_note_path_scoped_commit_ignores_unrelated_staged_changes(
+  git_vault_registry: VaultRegistry,
+):
+  """§5 acceptance #2 — delete auto-commit is path-scoped. Unrelated
+  staged changes elsewhere in the vault must NOT be included in the
+  auto-commit. Verified via `git show --stat` showing exactly one file
+  changed.
+  """
+  await _make_note(git_vault_registry, "target", "target body")
+  await _make_note(git_vault_registry, "bystander", "bystander body")
+  vault_fs = git_vault_registry.get()
+  # Commit initial state so both files are in HEAD.
+  subprocess.run(["git", "add", "-A"], cwd=vault_fs.root, check=True)
+  subprocess.run(
+    ["git", "commit", "-q", "-m", "seed"], cwd=vault_fs.root, check=True
   )
-  assert "dirty_note.md" in post_status
+  # Stage an unrelated change on the bystander note.
+  bystander = vault_fs.root / "bystander.md"
+  bystander.write_text(
+    bystander.read_text(encoding="utf-8") + "\nunrelated edit\n",
+    encoding="utf-8",
+  )
+  subprocess.run(
+    ["git", "add", "bystander.md"], cwd=vault_fs.root, check=True
+  )
+
+  result = await delete_note.run(
+    arguments={"note_id": "target"},
+    bearer="tok",
+    vault_registry=git_vault_registry,
+  )
+  assert result["isError"] is False
+  git_sha = result["structuredContent"]["git_sha"]
+  assert isinstance(git_sha, str) and len(git_sha) == 40
+
+  # The auto-commit should touch ONLY target.md.
+  stat = subprocess.run(
+    ["git", "show", "--name-only", "--pretty=format:", git_sha],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout.strip().split("\n")
+  changed = [f for f in stat if f.strip()]
+  assert changed == ["target.md"], (
+    f"expected commit to touch only target.md, got: {changed}"
+  )
+  # Bystander's staged change is still staged, still not committed.
+  status = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert "M  bystander.md" in status, (
+    f"expected bystander.md to remain staged, got: {status!r}"
+  )
+
+
+@pytest.mark.asyncio
+async def test_delete_note_custom_message_is_honoured(
+  git_vault_registry: VaultRegistry,
+):
+  """§5 acceptance #4 — caller-supplied `message` overrides the default."""
+  await _make_note(git_vault_registry, "target", "body")
+  vault_fs = git_vault_registry.get()
+  subprocess.run(["git", "add", "-A"], cwd=vault_fs.root, check=True)
+  subprocess.run(
+    ["git", "commit", "-q", "-m", "seed"], cwd=vault_fs.root, check=True
+  )
+
+  result = await delete_note.run(
+    arguments={
+      "note_id": "target",
+      "message": "retire target: superseded by new_target",
+    },
+    bearer="tok",
+    vault_registry=git_vault_registry,
+  )
+  assert result["isError"] is False
+  sc = result["structuredContent"]
+  assert sc["message"] == "retire target: superseded by new_target"
+  subject = subprocess.run(
+    ["git", "log", "-1", "--pretty=format:%s", sc["git_sha"]],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert subject == "retire target: superseded by new_target"

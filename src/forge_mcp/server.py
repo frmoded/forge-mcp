@@ -397,6 +397,7 @@ def _make_server(
     old_note_id: str,
     new_note_id: str,
     vault: str | None = None,
+    message: str | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -408,6 +409,8 @@ def _make_server(
     }
     if vault is not None:
       args["vault"] = vault
+    if message is not None:
+      args["message"] = message
     result = await rename_note.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
@@ -422,6 +425,7 @@ def _make_server(
     ctx: Context,
     note_id: str,
     vault: str | None = None,
+    message: str | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -430,6 +434,8 @@ def _make_server(
     args: dict[str, Any] = {"note_id": note_id}
     if vault is not None:
       args["vault"] = vault
+    if message is not None:
+      args["message"] = message
     result = await delete_note.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )

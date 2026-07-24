@@ -709,7 +709,12 @@ class VaultFS:
 
   # -- Rename / delete (CW-MCP-rename-delete-note) --------------------------
 
-  def rename_note(self, old_note_id: str, new_note_id: str) -> Path:
+  def rename_note(
+    self,
+    old_note_id: str,
+    new_note_id: str,
+    message: str | None = None,
+  ) -> tuple[Path, str | None, str | None]:
     """Rename a note within this vault.
 
     Both note_ids validated via `note_path` (path-traversal defense,
@@ -727,6 +732,18 @@ class VaultFS:
     as it exists in HEAD to the new path, discarding any transient in-
     flight edits. If HEAD has no such file (uncommitted / just-added-
     never-committed), falls through to plain `Path.rename()`.
+
+    CW-forge-mcp-delete-and-rename-note-auto-commit (drain 2026-07-24-1500):
+    On git-tracked vaults where the source was tracked in HEAD (so
+    `git mv` actually ran), we now commit the rename immediately using
+    a path-scoped `git commit -- <old_rel> <new_rel>` so unrelated
+    staged changes elsewhere in the vault are NOT swept in. If a
+    caller-supplied `message` is None, defaults to
+    `rename note <old_note_id> → <new_note_id>`.
+
+    Returns `(new_path, git_sha_or_None, commit_message_or_None)`.
+    git_sha is None when the vault isn't git-tracked OR when HEAD didn't
+    track the source (nothing was committed).
 
     Raises NoteNotFound if `old_note_id` doesn't resolve to a file.
     Raises NoteExists if `new_note_id` already resolves to a file.
@@ -762,7 +779,7 @@ class VaultFS:
         # Source never committed — no HEAD entry to reset from. Plain
         # rename; git-status will show target as untracked (?? <rel_new>).
         old_path.rename(new_path)
-        return new_path
+        return new_path, None, None
       # Source is tracked in HEAD. Reset any working-tree drift first.
       try:
         subprocess.run(
@@ -784,16 +801,28 @@ class VaultFS:
           f"git mv failed for {old_note_id!r} → {new_note_id!r}: "
           f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
         ) from exc
+      # Auto-commit the rename (drain 2026-07-24-1500). Path-scoped so
+      # unrelated staged changes are NOT swept in. Both old and new rels
+      # are named so git commits the deletion + addition atomically.
+      commit_message = message or (
+        f"rename note {_stem(rel_old)} → {_stem(rel_new)}"
+      )
+      git_sha = _git_commit_paths(
+        self.root, [rel_old, rel_new], commit_message,
+      )
+      return new_path, git_sha, commit_message
     else:
       old_path.rename(new_path)
-    return new_path
+    return new_path, None, None
 
-  def delete_note(self, note_id: str) -> Path:
+  def delete_note(
+    self, note_id: str, message: str | None = None,
+  ) -> tuple[Path, str | None, str | None]:
     """Delete a note from this vault.
 
     Path validated via `note_path`. If the vault is git-tracked, uses
-    `git rm` (stages the removal for the caller's next commit); else
-    plain `Path.unlink`.
+    `git rm` (stages the removal, then commits); else plain
+    `Path.unlink`.
 
     On git-tracked vaults, this method DESTROYS any unstaged working-
     tree modifications to the target file before removing it
@@ -805,10 +834,19 @@ class VaultFS:
     file (uncommitted / just-added-never-committed), falls through to
     plain `Path.unlink()`.
 
+    CW-forge-mcp-delete-and-rename-note-auto-commit (drain 2026-07-24-1500):
+    On git-tracked vaults where the file was tracked in HEAD (so
+    `git rm` actually ran), we now commit the removal immediately using
+    a path-scoped `git commit -- <rel>` so unrelated staged changes
+    elsewhere in the vault are NOT swept in. If a caller-supplied
+    `message` is None, defaults to `delete note <note_id>`.
+
+    Returns `(path, git_sha_or_None, commit_message_or_None)`. git_sha
+    is None when the vault isn't git-tracked OR when HEAD didn't track
+    the file (nothing was committed).
+
     Raises NoteNotFound if the note doesn't exist.
     Raises NoteIdInvalid on traversal / shape violations.
-    Returns the vault-relative path that was removed (for the caller's
-    result envelope).
     """
     path = self.note_path(note_id)
     if not path.is_file():
@@ -835,7 +873,7 @@ class VaultFS:
         # File never committed — no HEAD entry to reset from. Plain
         # unlink; git-status will then show "?? <rel>" cleaned.
         path.unlink()
-        return path
+        return path, None, None
       # File is tracked in HEAD. Reset any working-tree drift first.
       try:
         subprocess.run(
@@ -857,9 +895,14 @@ class VaultFS:
           f"git rm failed for {note_id!r}: "
           f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
         ) from exc
+      # Auto-commit the deletion (drain 2026-07-24-1500). Path-scoped
+      # so unrelated staged changes are NOT swept in.
+      commit_message = message or f"delete note {_stem(rel)}"
+      git_sha = _git_commit_paths(self.root, [rel], commit_message)
+      return path, git_sha, commit_message
     else:
       path.unlink()
-    return path
+    return path, None, None
 
   # -- Listing (for forge_read_notes_in_vault) ------------------------------
 
@@ -1017,6 +1060,46 @@ def _git_commit_file(root: Path, path: Path, message: str) -> str | None:
     )
     subprocess.run(
       ["git", "-C", str(root), "commit", "-m", message, "--", str(rel)],
+      capture_output=True, text=True, check=True,
+    )
+    sha_res = subprocess.run(
+      ["git", "-C", str(root), "rev-parse", "HEAD"],
+      capture_output=True, text=True, check=True,
+    )
+    return sha_res.stdout.strip() or None
+  except subprocess.CalledProcessError:
+    return None
+
+
+def _stem(rel: Path) -> str:
+  """Vault-relative `.md`-less path for use in default commit messages."""
+  s = str(rel)
+  return s[:-3] if s.endswith(".md") else s
+
+
+def _git_commit_paths(
+  root: Path, rels: list[Path], message: str,
+) -> str | None:
+  """Path-scoped `git commit -m <message> -- <rel...>`. Returns the
+  commit SHA on success; None on any failure (delete/rename remain
+  best-effort at the commit layer — the git operation already staged
+  the change and a manual commit will pick it up if this fails).
+
+  Path-scoped commit deliberately does NOT touch unrelated staged
+  changes elsewhere in the vault. This matches
+  forge_commit_recipe's contract (drain §5 acceptance-criteria #2).
+
+  Unlike `_git_commit_file`, we do NOT run `git add` — for delete/rename
+  the operations that produced these staged changes (`git rm` / `git mv`)
+  already staged them, and running `git add` on a deleted-in-index path
+  is either a no-op (with modern git's `--all` inference) or a footgun
+  depending on git version. Path-scoped commit picks up the staged
+  changes on those rels directly.
+  """
+  try:
+    subprocess.run(
+      ["git", "-C", str(root), "commit", "-m", message, "--"]
+      + [str(r) for r in rels],
       capture_output=True, text=True, check=True,
     )
     sha_res = subprocess.run(

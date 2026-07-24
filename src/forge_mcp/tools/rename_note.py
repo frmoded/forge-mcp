@@ -47,6 +47,14 @@ INPUT_SCHEMA: dict[str, Any] = {
         "the first-registered vault. Rename is same-vault only."
       ),
     },
+    "message": {
+      "type": "string",
+      "description": (
+        "Optional commit message override (git-tracked vaults only). "
+        "Defaults to `rename note <old> → <new>` when omitted. Ignored "
+        "on untracked vaults."
+      ),
+    },
   },
 }
 
@@ -63,16 +71,33 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "new_path": {"type": "string"},
     "absolute_path": {"type": "string"},
     "git_tracked": {"type": "boolean"},
+    "git_sha": {
+      "type": ["string", "null"],
+      "description": (
+        "40-char SHA of the auto-created rename commit "
+        "(drain 2026-07-24-1500). Null when the vault isn't git-tracked "
+        "or when the source was never in HEAD."
+      ),
+    },
+    "message": {
+      "type": ["string", "null"],
+      "description": "The commit message actually used, or null when no commit was made.",
+    },
   },
 }
 
 DESCRIPTION = (
   "Rename an existing note within a vault. Refuses to overwrite an "
-  "existing destination. If the vault is git-tracked, uses git mv to "
-  "preserve history; otherwise plain fs rename. Parent dirs for the "
-  "new path are created automatically. Pass `vault` to target a "
-  "specific vault; omit for the first-registered. Same-vault only "
-  "(cross-vault move is out of scope)."
+  "existing destination. If the vault is git-tracked, uses git mv + "
+  "auto-commits the rename (returns git_sha) — mirrors "
+  "forge_commit_recipe's contract per drain 2026-07-24-1500. Otherwise "
+  "plain fs rename and git_sha is null. Auto-commit is path-scoped so "
+  "unrelated staged changes elsewhere in the vault are NOT swept in. "
+  "Parent dirs for the new path are created automatically. Pass "
+  "`vault` to target a specific vault; omit for the first-registered. "
+  "Pass optional `message` to override the default `rename note "
+  "<old> → <new>` commit subject. Same-vault only (cross-vault move "
+  "is out of scope)."
 )
 
 
@@ -88,6 +113,8 @@ def _error(
       "new_path": "",
       "absolute_path": "",
       "git_tracked": False,
+      "git_sha": None,
+      "message": None,
     },
     "isError": True,
   }
@@ -105,6 +132,7 @@ async def run(
   old_note_id = arguments.get("old_note_id")
   new_note_id = arguments.get("new_note_id")
   vault_name = arguments.get("vault")
+  message = arguments.get("message")
 
   if not isinstance(old_note_id, str) or not old_note_id.strip():
     return _error(
@@ -135,7 +163,11 @@ async def run(
     vault_name = vault_registry.names()[0]
 
   try:
-    new_absolute = vault_fs.rename_note(old_note_id, new_note_id)
+    new_absolute, git_sha, commit_msg = vault_fs.rename_note(
+      old_note_id,
+      new_note_id,
+      message=message if isinstance(message, str) else None,
+    )
   except NoteIdInvalid as exc:
     return _error(
       f"Invalid note_id: {exc}",
@@ -173,14 +205,18 @@ async def run(
     new_path=new_rel,
     absolute_path=str(new_absolute),
     git_tracked=_is_git_tracked(vault_fs.root),
+    git_sha=git_sha,
+    message=commit_msg,
   )
+  sha_suffix = f" @ {git_sha[:7]}" if git_sha else ""
   return {
     "content": [
       {
         "type": "text",
         "text": (
           f"Renamed {_normalize(old_note_id)!r} → "
-          f"{_normalize(new_note_id)!r} in vault {vault_name!r}."
+          f"{_normalize(new_note_id)!r} in vault {vault_name!r}"
+          f"{sha_suffix}."
         ),
       }
     ],

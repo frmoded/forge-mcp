@@ -39,6 +39,14 @@ INPUT_SCHEMA: dict[str, Any] = {
         "the first-registered vault."
       ),
     },
+    "message": {
+      "type": "string",
+      "description": (
+        "Optional commit message override (git-tracked vaults only). "
+        "Defaults to `delete note <note_id>` when omitted. Ignored on "
+        "untracked vaults."
+      ),
+    },
   },
 }
 
@@ -58,20 +66,36 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         "destructive of any transient in-flight facet re-derivations."
       ),
     },
+    "git_sha": {
+      "type": ["string", "null"],
+      "description": (
+        "40-char SHA of the auto-created delete commit "
+        "(drain 2026-07-24-1500). Null when the vault isn't git-tracked "
+        "or when the file was never in HEAD (nothing to commit)."
+      ),
+    },
+    "message": {
+      "type": ["string", "null"],
+      "description": "The commit message actually used, or null when no commit was made.",
+    },
   },
 }
 
 DESCRIPTION = (
   "Delete an existing note from a vault. If the vault is git-tracked, "
-  "uses git rm (stages the removal for the caller's next commit); "
-  "otherwise plain fs unlink. Deletion is immediate + irreversible "
-  "via forge-mcp (driver can restore from git for tracked vaults). "
-  "On git-tracked vaults, any unstaged working-tree modifications to "
-  "the target are discarded (git checkout HEAD) before removal — "
-  "delete means remove the note entirely, including transient in-"
-  "flight edits. Pass `vault` to target a specific vault; omit for "
-  "the first-registered. Library notes cannot be deleted through "
-  "this tool."
+  "uses git rm + auto-commits the removal (returns git_sha) — mirrors "
+  "forge_commit_recipe's contract per drain 2026-07-24-1500. Otherwise "
+  "plain fs unlink and git_sha is null. Deletion is immediate + "
+  "irreversible via forge-mcp (driver can restore from git for tracked "
+  "vaults, e.g. `git revert <git_sha>`). On git-tracked vaults, any "
+  "unstaged working-tree modifications to the target are discarded "
+  "(git checkout HEAD) before removal — delete means remove the note "
+  "entirely, including transient in-flight edits. Auto-commit is "
+  "path-scoped so unrelated staged changes elsewhere in the vault are "
+  "NOT swept in. Pass `vault` to target a specific vault; omit for "
+  "the first-registered. Pass optional `message` to override the "
+  "default `delete note <note_id>` commit subject. Library notes "
+  "cannot be deleted through this tool."
 )
 
 
@@ -83,6 +107,8 @@ def _error(text: str, *, vault: str, note_id: str) -> dict[str, Any]:
       "note_id": note_id,
       "path": "",
       "git_tracked": False,
+      "git_sha": None,
+      "message": None,
     },
     "isError": True,
   }
@@ -99,6 +125,7 @@ async def run(
 ) -> dict[str, Any]:
   note_id = arguments.get("note_id")
   vault_name = arguments.get("vault")
+  message = arguments.get("message")
 
   if not isinstance(note_id, str) or not note_id.strip():
     return _error(
@@ -116,7 +143,9 @@ async def run(
     vault_name = vault_registry.names()[0]
 
   try:
-    removed_absolute = vault_fs.delete_note(note_id)
+    removed_absolute, git_sha, commit_msg = vault_fs.delete_note(
+      note_id, message=message if isinstance(message, str) else None,
+    )
   except NoteIdInvalid as exc:
     return _error(f"Invalid note_id: {exc}", vault=vault_name, note_id=note_id)
   except NoteNotFound as exc:
@@ -130,13 +159,17 @@ async def run(
     note_id=_normalize(note_id),
     path=rel_path,
     git_tracked=_is_git_tracked(vault_fs.root),
+    git_sha=git_sha,
+    message=commit_msg,
   )
+  sha_suffix = f" @ {git_sha[:7]}" if git_sha else ""
   return {
     "content": [
       {
         "type": "text",
         "text": (
-          f"Deleted {_normalize(note_id)!r} from vault {vault_name!r}."
+          f"Deleted {_normalize(note_id)!r} from vault {vault_name!r}"
+          f"{sha_suffix}."
         ),
       }
     ],
