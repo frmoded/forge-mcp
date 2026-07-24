@@ -127,3 +127,64 @@ async def test_normalizes_md_suffix(single_vault_registry: VaultRegistry):
   )
   assert result["isError"] is False
   assert result["structuredContent"]["note_id"] == "with_suffix"
+
+
+@pytest.mark.asyncio
+async def test_delete_note_handles_dirty_working_tree(
+  git_vault_registry: VaultRegistry,
+):
+  """CW-forge-delete-note-handle-dirty-working-tree (drain 2026-07-23-1800)
+  §4 Part A — git-tracked vault where the target file has unstaged
+  working-tree modifications. Reproduces wizard's 2026-07-23 real-world
+  failure: MCP client commits a note; plugin re-derives Python facet
+  on disk without committing; next delete must NOT fail with `git rm
+  failed: local modifications`.
+  """
+  await _make_note(git_vault_registry, "dirty_note", "original body")
+  vault_fs = git_vault_registry.get()
+  # Commit initial so the file exists in HEAD.
+  subprocess.run(["git", "add", "-A"], cwd=vault_fs.root, check=True)
+  subprocess.run(
+    ["git", "commit", "-q", "-m", "seed"], cwd=vault_fs.root, check=True
+  )
+  # Simulate the plugin re-deriving Python facet on disk (unstaged edit).
+  note_path = vault_fs.root / "dirty_note.md"
+  note_path.write_text(
+    note_path.read_text(encoding="utf-8")
+    + "\n# Python\n\nprint('re-derived')\n",
+    encoding="utf-8",
+  )
+  # Sanity: git sees the file as modified before the delete.
+  pre_status = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert " M dirty_note.md" in pre_status or "M  dirty_note.md" in pre_status, (
+    f"expected dirty_note.md to be modified before delete, got: {pre_status!r}"
+  )
+
+  # The action under test.
+  result = await delete_note.run(
+    arguments={"note_id": "dirty_note"},
+    bearer="tok",
+    vault_registry=git_vault_registry,
+  )
+
+  # Expected: clean success; file gone from disk; deletion staged.
+  assert result["isError"] is False, (
+    "delete_note failed on dirty working tree: "
+    f"{result['content'][0]['text']!r}"
+  )
+  assert result["structuredContent"]["git_tracked"] is True
+  assert result["structuredContent"]["note_id"] == "dirty_note"
+  assert result["structuredContent"]["path"] == "dirty_note.md"
+  assert not note_path.exists()
+  post_status = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  # `D` on the left column = staged deletion.
+  assert post_status.startswith("D ") or "\nD " in post_status, (
+    f"expected staged deletion, got: {post_status!r}"
+  )
+  assert "dirty_note.md" in post_status

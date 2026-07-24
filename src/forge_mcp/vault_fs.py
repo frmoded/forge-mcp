@@ -753,6 +753,16 @@ class VaultFS:
     `git rm` (stages the removal for the caller's next commit); else
     plain `Path.unlink`.
 
+    On git-tracked vaults, this method DESTROYS any unstaged working-
+    tree modifications to the target file before removing it
+    (`git checkout HEAD -- <rel>` precedes `git rm`). This handles the
+    common case where an external process (e.g., the Obsidian plugin)
+    has re-derived a facet between the MCP client's prior commit and
+    this delete call. Delete semantics: remove the note entirely,
+    including any transient working-tree state. If HEAD has no such
+    file (uncommitted / just-added-never-committed), falls through to
+    plain `Path.unlink()`.
+
     Raises NoteNotFound if the note doesn't exist.
     Raises NoteIdInvalid on traversal / shape violations.
     Returns the vault-relative path that was removed (for the caller's
@@ -763,6 +773,38 @@ class VaultFS:
       raise NoteNotFound(f"note {note_id!r} not found at {path}")
     if _is_git_tracked(self.root):
       rel = path.relative_to(self.root)
+      # CW-forge-delete-note-handle-dirty-working-tree (drain 1800):
+      # `git ls-tree HEAD -- <rel>` pre-check tells us whether HEAD
+      # tracks this path. If it does, reset any unstaged working-tree
+      # modifications before `git rm` (else `git rm` refuses with
+      # "local modifications"). If HEAD does NOT track the path
+      # (uncommitted / just-added-never-committed), skip the reset
+      # and fall through to `Path.unlink()` — the file is effectively
+      # untracked from HEAD's perspective and `git rm` would also
+      # refuse. `ls-tree` is quiet (empty stdout when the path is
+      # absent, non-empty when present) and returns 0 either way for
+      # a valid ref, so we probe stdout rather than exit code.
+      ls_tree = subprocess.run(
+        ["git", "-C", str(self.root), "ls-tree", "HEAD", "--", str(rel)],
+        capture_output=True, text=True, check=False,
+      )
+      in_head = ls_tree.returncode == 0 and ls_tree.stdout.strip() != ""
+      if not in_head:
+        # File never committed — no HEAD entry to reset from. Plain
+        # unlink; git-status will then show "?? <rel>" cleaned.
+        path.unlink()
+        return path
+      # File is tracked in HEAD. Reset any working-tree drift first.
+      try:
+        subprocess.run(
+          ["git", "-C", str(self.root), "checkout", "HEAD", "--", str(rel)],
+          capture_output=True, text=True, check=True,
+        )
+      except subprocess.CalledProcessError as exc:
+        raise VaultFSError(
+          f"git checkout HEAD failed for {note_id!r} (pre-delete reset): "
+          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
+        ) from exc
       try:
         subprocess.run(
           ["git", "-C", str(self.root), "rm", "--", str(rel)],

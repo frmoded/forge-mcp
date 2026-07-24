@@ -49,7 +49,15 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "vault": {"type": "string"},
     "note_id": {"type": "string"},
     "path": {"type": "string"},
-    "git_tracked": {"type": "boolean"},
+    "git_tracked": {
+      "type": "boolean",
+      "description": (
+        "True iff the vault is a git repo. When True, unstaged "
+        "working-tree modifications to the target file are discarded "
+        "via `git checkout HEAD --` before `git rm`; delete is thus "
+        "destructive of any transient in-flight facet re-derivations."
+      ),
+    },
   },
 }
 
@@ -58,8 +66,12 @@ DESCRIPTION = (
   "uses git rm (stages the removal for the caller's next commit); "
   "otherwise plain fs unlink. Deletion is immediate + irreversible "
   "via forge-mcp (driver can restore from git for tracked vaults). "
-  "Pass `vault` to target a specific vault; omit for the first-"
-  "registered. Library notes cannot be deleted through this tool."
+  "On git-tracked vaults, any unstaged working-tree modifications to "
+  "the target are discarded (git checkout HEAD) before removal — "
+  "delete means remove the note entirely, including transient in-"
+  "flight edits. Pass `vault` to target a specific vault; omit for "
+  "the first-registered. Library notes cannot be deleted through "
+  "this tool."
 )
 
 
