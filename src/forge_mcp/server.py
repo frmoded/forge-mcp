@@ -218,6 +218,7 @@ def _make_server(
     ctx: Context,
     source: str,
     domains: list[str] | None = None,
+    resolve_slot: dict[str, str] | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -226,6 +227,13 @@ def _make_server(
     args: dict[str, Any] = {"source": source}
     if domains is not None:
       args["domains"] = domains
+    # CW-forge-mcp-wire-resolve-slot-at-fastmcp-wrapper (drain 1200).
+    # Drain 1405 landed resolve_slot in tools/run_recipe.py's INPUT_SCHEMA
+    # + run() body but forgot this wrapper — FastMCP generates the wire
+    # schema from THIS function's signature, so without the param here
+    # the value never reached the adapter.
+    if resolve_slot is not None:
+      args["resolve_slot"] = resolve_slot
     result = await run_recipe.run(arguments=args, bearer=bearer)
     return _to_call_tool_result(result)
 

@@ -195,6 +195,65 @@ async def test_run_recipe_wire_shape_no_double_wrap(server):
 
 
 @pytest.mark.asyncio
+async def test_run_recipe_forwards_resolve_slot_through_fastmcp_dispatch(server):
+  """CW-forge-mcp-wire-resolve-slot-at-fastmcp-wrapper (drain 2026-07-24-1200).
+
+  Wire-path regression lock: the FastMCP wrapper `_forge_run_recipe` MUST
+  accept `resolve_slot` in its signature so FastMCP's auto-generated
+  schema advertises the param + the dispatch layer passes it through
+  to the adapter.
+
+  Drain 1405 shipped `resolve_slot` HALF-WAY: tools/run_recipe.py's
+  INPUT_SCHEMA dict declared it and `run()` body read it, BUT the
+  FastMCP wrapper at server.py:217 never gained the parameter. Because
+  FastMCP generates wire schemas from Python function signatures (not
+  from the tool module's INPUT_SCHEMA dict), the deployed tool
+  advertised no `resolve_slot`, and calls stripping it never reached
+  the adapter. Drain 1405's tests exercised `run_recipe.run()`
+  directly — bypassing the dispatcher — so they passed while the
+  wire path was broken.
+
+  This test exercises the tool via the FastMCP dispatch shape (same
+  code path a real MCP client's `tools/call` request traverses) — so
+  FastMCP's signature-validation gate is in the path. Asserts the
+  resolve_slot value reaches the outbound /run body, which only
+  succeeds when the wrapper both accepts + forwards it.
+  """
+  tool = _tool(server, "forge_run_recipe")
+  async with respx.mock(base_url="http://localhost:8000") as mock:
+    route = mock.post("/run").mock(
+      return_value=httpx.Response(
+        200,
+        json={
+          "parse_status": "ok",
+          "run_id": "rs00000000000000000000000000abcd",
+          "exit_code": 0,
+          "duration_ms": 10,
+          "timed_out": False,
+          "stdout_preview": "",
+          "artifacts": [],
+        },
+      )
+    )
+    await tool.run(
+      arguments={
+        "source": "Let x = {{ pick a number }}.\nReturn x.\n",
+        "resolve_slot": {"slot_abcd1234": "return 42"},
+      },
+      context=_FakeCtx(),
+      convert_result=True,
+    )
+  assert route.called, "no /run call reached the mocked upstream"
+  import json as _json
+  sent = _json.loads(route.calls.last.request.content)
+  assert sent.get("resolve_slot") == {"slot_abcd1234": "return 42"}, (
+    f"resolve_slot missing or malformed in /run body: {sent!r}. "
+    "The FastMCP wrapper _forge_run_recipe likely dropped it — "
+    "check server.py's signature."
+  )
+
+
+@pytest.mark.asyncio
 async def test_get_run_result_wire_shape_no_double_wrap(server):
   """Drain §5 test #4 — get_run_result returns flat structuredContent."""
   tool = _tool(server, "forge_get_run_result")
