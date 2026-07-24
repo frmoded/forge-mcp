@@ -109,10 +109,9 @@ class VaultNoteEntry(BaseModel):
       "rather than Literal so the MCP layer surfaces whatever the plugin "
       "writes (including future Phase 2 state additions) without erroring. "
       "Recognized values today: `synced` | `stale-recipe` | `stale-python` "
-      "| `stale-both`. `authoring` is computed-only inside the plugin "
-      "(never persisted per drain 1700 Proposal B). None when the field "
-      "is absent (pre-Phase-1 note not yet touched by the plugin); "
-      "callers should treat None as 'unknown' and NOT infer 'synced'."
+      "| `stale-both`. None when the field is absent (pre-Phase-1 note not "
+      "yet touched by the plugin); callers should treat None as 'unknown' "
+      "and NOT infer 'synced'."
     ),
   )
 
