@@ -190,3 +190,74 @@ async def test_normalizes_md_suffix_in_ids(
   sc = result["structuredContent"]
   assert sc["old_note_id"] == "src"
   assert sc["new_note_id"] == "dst"
+
+
+@pytest.mark.asyncio
+async def test_rename_note_handles_dirty_working_tree(
+  git_vault_registry: VaultRegistry,
+):
+  """CW-forge-rename-note-handle-dirty-working-tree (drain 2026-07-23-1905)
+  §4 Part A — git-tracked vault where the SOURCE file has unstaged
+  working-tree modifications. Sister-fix to drain 1800's delete-note
+  handling: MCP client commits a note; plugin re-derives Python facet
+  on disk without committing; next rename must (a) succeed and (b)
+  produce a staged rename whose target content matches the HEAD source
+  content, NOT the plugin's dirty re-derivation.
+  """
+  await _make_note(git_vault_registry, "old_name", "original body")
+  vault_fs = git_vault_registry.get()
+  # Commit initial so the source exists in HEAD.
+  subprocess.run(["git", "add", "-A"], cwd=vault_fs.root, check=True)
+  subprocess.run(
+    ["git", "commit", "-q", "-m", "seed"], cwd=vault_fs.root, check=True
+  )
+  # Capture the HEAD content of the source for later comparison.
+  head_content = (vault_fs.root / "old_name.md").read_text(encoding="utf-8")
+
+  # Simulate the plugin re-deriving Python facet on disk (unstaged edit).
+  source_path = vault_fs.root / "old_name.md"
+  source_path.write_text(
+    head_content + "\n# Python\n\nprint('re-derived')\n",
+    encoding="utf-8",
+  )
+  # Sanity: git sees source as modified before the rename.
+  pre_status = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert " M old_name.md" in pre_status or "M  old_name.md" in pre_status, (
+    f"expected old_name.md to be modified before rename, got: {pre_status!r}"
+  )
+
+  # The action under test.
+  result = await rename_note.run(
+    arguments={"old_note_id": "old_name", "new_note_id": "new_name"},
+    bearer="tok",
+    vault_registry=git_vault_registry,
+  )
+
+  # Expected: clean success; new path exists; source gone.
+  assert result["isError"] is False, (
+    "rename_note failed on dirty working tree: "
+    f"{result['content'][0]['text']!r}"
+  )
+  new_path = vault_fs.root / "new_name.md"
+  assert new_path.exists(), "new_name.md should exist after rename"
+  assert not source_path.exists(), "old_name.md should be gone after rename"
+
+  # KEY assertion: new path's content matches the HEAD source content,
+  # NOT the plugin's dirty edit. This is what fails absent the fix.
+  assert new_path.read_text(encoding="utf-8") == head_content, (
+    "rename produced target content != HEAD source content — the "
+    "plugin's unstaged edit was silently included in the rename "
+    "instead of being discarded"
+  )
+
+  # Git status should show a staged rename (or add/delete pair).
+  post_status = subprocess.run(
+    ["git", "status", "--porcelain"],
+    cwd=vault_fs.root, check=True, capture_output=True, text=True,
+  ).stdout
+  assert "new_name.md" in post_status, (
+    f"expected new_name.md in git status, got: {post_status!r}"
+  )

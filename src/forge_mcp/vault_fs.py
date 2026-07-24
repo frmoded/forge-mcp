@@ -718,6 +718,16 @@ class VaultFS:
     `Path.rename`. Parent dirs for `new_note_id` are created if
     absent.
 
+    On git-tracked vaults, this method DISCARDS any unstaged working-
+    tree modifications to the source file before renaming it
+    (`git checkout HEAD -- <rel_source>` precedes `git mv`). This
+    handles the common case where an external process (e.g., the
+    Obsidian plugin) has re-derived a facet between the MCP client's
+    prior commit and this rename call. Rename semantics: move the note
+    as it exists in HEAD to the new path, discarding any transient in-
+    flight edits. If HEAD has no such file (uncommitted / just-added-
+    never-committed), falls through to plain `Path.rename()`.
+
     Raises NoteNotFound if `old_note_id` doesn't resolve to a file.
     Raises NoteExists if `new_note_id` already resolves to a file.
     Raises NoteIdInvalid on traversal / shape violations of either id.
@@ -732,6 +742,38 @@ class VaultFS:
     if _is_git_tracked(self.root):
       rel_old = old_path.relative_to(self.root)
       rel_new = new_path.relative_to(self.root)
+      # CW-forge-rename-note-handle-dirty-working-tree (drain 1905):
+      # Mirror delete_note's pattern (drain 1800). `git ls-tree HEAD`
+      # pre-check tells us whether HEAD tracks the source. If it does,
+      # reset any unstaged working-tree modifications before `git mv`
+      # (else `git mv` silently promotes the dirty content into the
+      # rename target, mixing the plugin's re-derivation into what the
+      # MCP client thinks is a pure move). If HEAD does NOT track the
+      # source (uncommitted / just-added-never-committed), skip the
+      # reset and fall through to `Path.rename()` — no HEAD entry to
+      # reset from, and `git mv` on such a source behaves indistinguish-
+      # ably from `Path.rename()` + a target add.
+      ls_tree = subprocess.run(
+        ["git", "-C", str(self.root), "ls-tree", "HEAD", "--", str(rel_old)],
+        capture_output=True, text=True, check=False,
+      )
+      in_head = ls_tree.returncode == 0 and ls_tree.stdout.strip() != ""
+      if not in_head:
+        # Source never committed — no HEAD entry to reset from. Plain
+        # rename; git-status will show target as untracked (?? <rel_new>).
+        old_path.rename(new_path)
+        return new_path
+      # Source is tracked in HEAD. Reset any working-tree drift first.
+      try:
+        subprocess.run(
+          ["git", "-C", str(self.root), "checkout", "HEAD", "--", str(rel_old)],
+          capture_output=True, text=True, check=True,
+        )
+      except subprocess.CalledProcessError as exc:
+        raise VaultFSError(
+          f"git checkout HEAD failed for {old_note_id!r} (pre-rename reset): "
+          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
+        ) from exc
       try:
         subprocess.run(
           ["git", "-C", str(self.root), "mv", str(rel_old), str(rel_new)],
