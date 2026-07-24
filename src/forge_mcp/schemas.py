@@ -148,6 +148,31 @@ class ParseErrorDetail(BaseModel):
   )
 
 
+class CompileSlotEntry(BaseModel):
+  """CW-forge-transpile-compile-recipe-return-slots-array (drain 2026-07-24-1205).
+
+  Per-slot entry mirroring forge-transpile's `SlotEntry`. Usable
+  directly as a key in `forge_run_recipe`'s `resolve_slot` map:
+
+      resolve_slot = {entry.slot_id: <resolved_python> for entry in slots}
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  slot_id: str = Field(
+    ...,
+    description=(
+      "Stable identifier — usable as the key in `forge_run_recipe`'s "
+      "`resolve_slot` map. Content-hash-based (`slot_<8-hex>`) with an "
+      "`_<index>` suffix for duplicate-prose slots."
+    ),
+  )
+  prose: str = Field(
+    ...,
+    description="Verbatim prose inside the `{{ ... }}` markers.",
+  )
+
+
 class CompileResult(BaseModel):
   """Result envelope for forge_compile_recipe.
 
@@ -168,6 +193,13 @@ class CompileResult(BaseModel):
   )
   unresolved_slot_count: int = Field(
     0, ge=0, description="Number of unresolved `{{ ... }}` slots."
+  )
+  slots: list[CompileSlotEntry] = Field(
+    default_factory=list,
+    description=(
+      "Per-slot entries added in drain 2026-07-24-1205. Invariant: "
+      "`len(slots) == unresolved_slot_count`. Empty list when no slots."
+    ),
   )
   parse_error: ParseErrorDetail | None = Field(
     None, description="Structured parse error; None on success."

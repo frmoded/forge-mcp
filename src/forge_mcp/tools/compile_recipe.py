@@ -38,6 +38,24 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "parse_status": {"type": "string", "enum": ["ok", "parse_error"]},
     "python_source": {"type": ["string", "null"]},
     "unresolved_slot_count": {"type": "integer", "minimum": 0},
+    "slots": {
+      "type": "array",
+      "description": (
+        "Per-slot entries added in drain 2026-07-24-1205. Each entry "
+        "carries `slot_id` (stable, content-hash-based) and `prose` "
+        "(verbatim `{{ ... }}` contents). `len(slots) == unresolved_"
+        "slot_count`. Use slot_id as the key when calling forge_run_"
+        "recipe with resolve_slot."
+      ),
+      "items": {
+        "type": "object",
+        "required": ["slot_id", "prose"],
+        "properties": {
+          "slot_id": {"type": "string"},
+          "prose": {"type": "string"},
+        },
+      },
+    },
     "parse_error": {
       "type": ["object", "null"],
       "properties": {
@@ -178,13 +196,23 @@ async def run(
       "isError": True,
     }
 
-  # Success.
-  slot_hint = (
-    f" ({result.unresolved_slot_count} unresolved slot(s) — call /resolve-slot "
-    f"before /run)"
-    if result.unresolved_slot_count > 0
-    else ""
-  )
+  # Success. If slots are present, show the slot_ids inline so agents
+  # get the wire-loop hint alongside the count. Truncate at 5 for
+  # readability; the load-bearing signal is the structured `slots`
+  # field per Diagnostics-in-primary-surface — the text is redundancy.
+  if result.unresolved_slot_count > 0:
+    ids = [s.slot_id for s in result.slots]
+    if len(ids) > 5:
+      shown = ", ".join(ids[:5]) + f", ... and {len(ids) - 5} more"
+    else:
+      shown = ", ".join(ids)
+    slot_hint = (
+      f" ({result.unresolved_slot_count} unresolved slot(s): {shown} "
+      f"— call forge_run_recipe with resolve_slot={{<slot_id>: <python>}} "
+      f"to resolve)"
+    )
+  else:
+    slot_hint = ""
   return {
     "content": [
       {

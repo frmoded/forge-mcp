@@ -160,3 +160,78 @@ async def test_compile_recipe_reports_unresolved_slot_count() -> None:
   assert result["structuredContent"]["unresolved_slot_count"] == 2
   # Text hint mentions the slots so the agent knows to call /resolve-slot.
   assert "2 unresolved" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_compile_recipe_propagates_slots_array() -> None:
+  """CW-forge-transpile-compile-recipe-return-slots-array (drain 2026-07-24-1205).
+
+  Forge-transpile's /compile returns `slots: [{slot_id, prose}]`
+  alongside `unresolved_slot_count`. MCP's CompileResult MUST
+  propagate that field verbatim so wizard can build the
+  `resolve_slot={<slot_id>: <python>}` map.
+  """
+  respx.post("http://localhost:8000/compile").mock(
+    return_value=httpx.Response(
+      200,
+      json={
+        "parse_status": "ok",
+        "python_source": "def compute(context):\n    ...",
+        "unresolved_slot_count": 2,
+        "slots": [
+          {"slot_id": "slot_abcd1234", "prose": "pick a key"},
+          {"slot_id": "slot_ef567890", "prose": "blues about heartbreak"},
+        ],
+        "parse_error": None,
+      },
+    )
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    result = await compile_recipe.run(
+      arguments={"source": "Let a = {{ pick a key }}.\nLet b = {{ blues about heartbreak }}."},
+      bearer="tok",
+      client=client,
+    )
+  assert result["isError"] is False
+  sc = result["structuredContent"]
+  assert sc["unresolved_slot_count"] == 2
+  assert "slots" in sc, f"CompileResult missing slots field: {sc!r}"
+  assert sc["slots"] == [
+    {"slot_id": "slot_abcd1234", "prose": "pick a key"},
+    {"slot_id": "slot_ef567890", "prose": "blues about heartbreak"},
+  ], f"slots not propagated verbatim: {sc['slots']!r}"
+  # Text hint mentions the slot_ids so agents get the wire-loop hint.
+  text = result["content"][0]["text"]
+  assert "slot_abcd1234" in text and "slot_ef567890" in text, (
+    f"expected slot_ids in success text; got: {text!r}"
+  )
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_compile_recipe_slots_defaults_to_empty_when_absent() -> None:
+  """Back-compat: if forge-transpile happens to omit `slots` (e.g., a
+  pre-drain-1205 build somewhere in the deploy chain), CompileResult
+  defaults slots to []. No crash; agent sees `unresolved_slot_count`
+  count without per-slot detail."""
+  respx.post("http://localhost:8000/compile").mock(
+    return_value=httpx.Response(
+      200,
+      json={
+        "parse_status": "ok",
+        "python_source": "def compute(context):\n    return 1",
+        "unresolved_slot_count": 0,
+        # NOTE: no `slots` key — simulates pre-drain-1205 upstream.
+        "parse_error": None,
+      },
+    )
+  )
+  async with ForgeServiceClient(base_url="http://localhost:8000") as client:
+    result = await compile_recipe.run(
+      arguments={"source": "Return 1.\n"},
+      bearer="tok",
+      client=client,
+    )
+  assert result["isError"] is False
+  assert result["structuredContent"]["slots"] == []
