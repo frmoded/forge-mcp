@@ -39,6 +39,8 @@ def test_vault_output_schema_lists_every_note_field_as_required() -> None:
 
 
 def test_note_entry_roundtrips_through_pydantic() -> None:
+  # Drain 2026-07-24-1730 added `inputs: list[NoteInputSpec]` — defaults
+  # to []. Payload omits it; the roundtrip fills in the empty default.
   payload = {
     "name": "compose_blues",
     "domain": "music",
@@ -48,8 +50,7 @@ def test_note_entry_roundtrips_through_pydantic() -> None:
     "uri": "forge-note:///music/compose_blues",
   }
   entry = NoteEntry.model_validate(payload)
-  # roundtrip
-  assert entry.model_dump() == payload
+  assert entry.model_dump() == {**payload, "inputs": []}
 
 
 def test_note_entry_rejects_missing_required_field() -> None:

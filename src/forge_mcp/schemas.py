@@ -17,6 +17,27 @@ from pydantic import BaseModel, ConfigDict, Field
 # -----------------------------------------------------------------------------
 
 
+class NoteInputSpec(BaseModel):
+  """One parameter of a library chip (drain 2026-07-24-1730).
+
+  `default` is the source-form repr of the Python default value
+  (e.g. `'major'`, `4`, `[4, 5]`, `None`) as produced by ast.unparse,
+  or null when the parameter is required. Consumers that need a runtime
+  value can `ast.literal_eval(default)` for pure literals.
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  name: str = Field(..., description="Parameter name.")
+  default: str | None = Field(
+    default=None,
+    description=(
+      "Source-form Python default value, or null when the input is required. "
+      "e.g. \"'major'\", \"4\", \"[4, 5]\", \"None\"."
+    ),
+  )
+
+
 class NoteEntry(BaseModel):
   """A single library note as returned by the catalog tool."""
 
@@ -38,6 +59,16 @@ class NoteEntry(BaseModel):
   uri: str = Field(
     ...,
     description="forge-note:///{domain}/{name} — stable identifier + future extension point.",
+  )
+  # Drain 2026-07-24-1730 — per-parameter defaults so callers can see
+  # which inputs are optional-with-default vs. required at introspection
+  # time. Empty when the chip has no parameters.
+  inputs: list[NoteInputSpec] = Field(
+    default_factory=list,
+    description=(
+      "Per-parameter records with name + default value. Required parameters "
+      "have default=null."
+    ),
   )
 
 
