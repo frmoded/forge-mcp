@@ -631,6 +631,12 @@ class VaultFS:
     # frontmatter for external observers (wizard / CC / CCQA / cohort
     # scripts) that read note state without loading the plugin.
     sync_state = parsed.frontmatter_dict.get("sync_state")
+    # Drain 2026-07-26-1200 — surface a discriminated `type` field so
+    # callers can distinguish action notes (frontmatter `type: action`)
+    # from data notes (`type: data`) from vanilla prose notes (no
+    # `type` frontmatter). Vanilla notes may still have arbitrary
+    # frontmatter fields — we only key on the `type` field itself.
+    note_type = _classify_note_type(parsed.frontmatter_dict)
     return {
       "raw": raw,
       "frontmatter": dict(parsed.frontmatter_dict),
@@ -640,7 +646,40 @@ class VaultFS:
       "data": data,
       "inputs": inputs,
       "sync_state": sync_state,
+      "type": note_type,
     }
+
+  # -- Vanilla markdown notes (CW-mcp-and-plugin-support-vanilla-notes) -----
+
+  def write_markdown_note(
+    self, note_id: str, body: str, *, allow_overwrite: bool = False,
+  ) -> Path:
+    """Write a raw markdown file at `note_id`, byte-for-byte from `body`.
+
+    Drain 2026-07-26-1200 — supports vanilla prose notes (e.g. music-
+    theory documentation) that live in a Forge vault without any
+    Forge-managed frontmatter. Unlike `create_note_shell`, this does
+    NOT inject `type: action` / `# Description` scaffolding — the
+    caller's `body` is written verbatim.
+
+    Path validated via `note_path` (path-traversal defense, hidden-
+    segment reject, symlink escape reject). Parent directories created
+    if missing.
+
+    - `allow_overwrite=False` (default) raises `NoteExists` if the
+      path is already occupied. Used by `forge_create_markdown_note`.
+    - `allow_overwrite=True` replaces the file's content atomically.
+      Used by `forge_edit_markdown_note` (which independently guards
+      against clobbering action notes at the tool layer).
+
+    Returns the absolute path written.
+    """
+    path = self.note_path(note_id)
+    if path.exists() and not allow_overwrite:
+      raise NoteExists(note_id, path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _atomic_write(path, body)
+    return path
 
   # -- Directory + note creation (CW-MCP-multi-vault-create-dir) ------------
 
@@ -951,6 +990,10 @@ class VaultFS:
       has_recipe = False
       recipe_version: int | None = None
       sync_state: str | None = None
+      # Drain 2026-07-26-1200 — surface `type` per entry. Default to
+      # `vanilla` on unreadable/unparseable files (same fallback as
+      # `has_recipe=False`).
+      note_type = "vanilla"
       try:
         raw = path.read_text(encoding="utf-8")
         parsed = parse_note(raw)
@@ -966,6 +1009,7 @@ class VaultFS:
         raw_sync = parsed.frontmatter_dict.get("sync_state")
         if isinstance(raw_sync, str):
           sync_state = raw_sync
+        note_type = _classify_note_type(parsed.frontmatter_dict)
       except (OSError, UnicodeDecodeError):
         # Unreadable file (permission, binary content mislabeled as
         # .md) — surface as unparseable, don't fail the listing.
@@ -977,6 +1021,7 @@ class VaultFS:
         "has_recipe": has_recipe,
         "recipe_version": recipe_version,
         "sync_state": sync_state,
+        "type": note_type,
       })
     entries.sort(key=lambda e: e["note_id"])
     return entries
@@ -1075,6 +1120,26 @@ def _stem(rel: Path) -> str:
   """Vault-relative `.md`-less path for use in default commit messages."""
   s = str(rel)
   return s[:-3] if s.endswith(".md") else s
+
+
+def _classify_note_type(frontmatter: dict) -> str:
+  """Discriminated note type per drain 2026-07-26-1200.
+
+  Frontmatter `type` field values seen in the wild:
+    - `"action"`: Forge action note (Description/Recipe/Python facets).
+    - `"data"`: Forge data note (`# Data` facet or pure JSON body).
+    - anything else / absent: vanilla prose note (no Forge structure).
+
+  Returns one of `"action"` | `"data"` | `"vanilla"`. Unknown `type`
+  values collapse to `"vanilla"` so future/typo values fail safely
+  (won't accidentally trigger action-note pipelines).
+  """
+  raw = frontmatter.get("type")
+  if raw == "action":
+    return "action"
+  if raw == "data":
+    return "data"
+  return "vanilla"
 
 
 def _git_commit_paths(

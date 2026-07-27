@@ -42,8 +42,10 @@ from .tools import (
   commit_recipe,
   compile_recipe,
   create_directory,
+  create_markdown_note,
   create_note,
   delete_note,
+  edit_markdown_note,
   get_run_result,
   list_vaults,
   read_note,
@@ -510,6 +512,60 @@ def _make_server(
     if vault is not None:
       args["vault"] = vault
     result = await read_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  # ---------------------------------------------------------------------------
+  # Vanilla markdown notes (CW-mcp-and-plugin-support-vanilla-notes,
+  # drain 2026-07-26-1200) — create/edit .md files with arbitrary body
+  # and no Forge-managed frontmatter.
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=create_markdown_note.TOOL_NAME,
+    description=create_markdown_note.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_create_markdown_note(
+    ctx: Context,
+    note_id: str,
+    body: str | None = None,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"note_id": note_id}
+    if body is not None:
+      args["body"] = body
+    if vault is not None:
+      args["vault"] = vault
+    result = await create_markdown_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=edit_markdown_note.TOOL_NAME,
+    description=edit_markdown_note.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_edit_markdown_note(
+    ctx: Context,
+    note_id: str,
+    body: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"note_id": note_id, "body": body}
+    if vault is not None:
+      args["vault"] = vault
+    result = await edit_markdown_note.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)

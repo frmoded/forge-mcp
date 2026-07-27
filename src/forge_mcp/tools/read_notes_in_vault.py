@@ -58,6 +58,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
           "path": {"type": "string"},
           "has_recipe": {"type": "boolean"},
           "recipe_version": {"type": ["integer", "null"], "minimum": 0},
+          "type": {"type": "string", "enum": ["action", "data", "vanilla"]},
         },
       },
     }

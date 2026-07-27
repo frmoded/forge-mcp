@@ -145,6 +145,21 @@ class VaultNoteEntry(BaseModel):
       "and NOT infer 'synced'."
     ),
   )
+  # CW-mcp-and-plugin-support-vanilla-notes (drain 2026-07-26-1200):
+  # discriminated `type` field so callers can classify a note without
+  # inspecting frontmatter directly. Values:
+  #   - "action" — Forge action note (`type: action` frontmatter).
+  #   - "data"   — Forge data note   (`type: data` frontmatter).
+  #   - "vanilla" — plain prose / doc note (no `type:` or unknown value).
+  type: Literal["action", "data", "vanilla"] = Field(
+    default="vanilla",
+    description=(
+      "Discriminated note kind: 'action' | 'data' | 'vanilla'. Derived "
+      "from `type` frontmatter — action notes are Forge-callable, data "
+      "notes are Forge inputs, vanilla notes are plain markdown docs "
+      "that live alongside them."
+    ),
+  )
 
 
 class VaultListResult(BaseModel):
@@ -364,6 +379,39 @@ class CreateNoteResult(BaseModel):
   absolute_path: str = Field(..., description="Absolute filesystem path.")
 
 
+class CreateMarkdownNoteResult(BaseModel):
+  """Result envelope for forge_create_markdown_note.
+
+  CW-mcp-and-plugin-support-vanilla-notes (drain 2026-07-26-1200).
+  Distinct from CreateNoteResult so future divergence (e.g., adding
+  git_sha) can happen without breaking the action-note surface.
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault name the note was created in.")
+  note_id: str = Field(..., description="Vault-relative note identifier (stem path).")
+  path: str = Field(..., description="Vault-relative path of the created .md file.")
+  absolute_path: str = Field(..., description="Absolute filesystem path.")
+
+
+class EditMarkdownNoteResult(BaseModel):
+  """Result envelope for forge_edit_markdown_note.
+
+  CW-mcp-and-plugin-support-vanilla-notes (drain 2026-07-26-1200).
+  Full-body replace on a vanilla note. Fails (isError) if the target
+  is an action note (`type: action` frontmatter) — those must go
+  through forge_commit_recipe.
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault name the note lives in.")
+  note_id: str = Field(..., description="Vault-relative note identifier (stem path).")
+  path: str = Field(..., description="Vault-relative path of the edited .md file.")
+  absolute_path: str = Field(..., description="Absolute filesystem path.")
+
+
 class NoteContent(BaseModel):
   """Full V2a content of a single vault note.
 
@@ -418,6 +466,17 @@ class NoteContent(BaseModel):
       "matching field on VaultNoteEntry for value grammar). None when "
       "the field is absent; callers should treat None as 'unknown' and "
       "NOT infer 'synced'."
+    ),
+  )
+  # CW-mcp-and-plugin-support-vanilla-notes (drain 2026-07-26-1200).
+  type: Literal["action", "data", "vanilla"] = Field(
+    default="vanilla",
+    description=(
+      "Discriminated note kind: 'action' | 'data' | 'vanilla'. Derived "
+      "from `type` frontmatter. Vanilla notes have no Forge-managed "
+      "structure — Recipe/Python/Data facets will be None/empty; only "
+      "`raw` (and `description`, if there's a leading `# Description`) "
+      "will carry content."
     ),
   )
 

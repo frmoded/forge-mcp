@@ -57,6 +57,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         "data": {"type": ["string", "null"]},
         "inputs": {"type": "array", "items": {"type": "string"}},
         "raw": {"type": "string"},
+        "type": {"type": "string", "enum": ["action", "data", "vanilla"]},
       },
     }
   },
@@ -86,6 +87,7 @@ def _error(text: str, *, note_id: str, vault: str) -> dict[str, Any]:
         "data": None,
         "inputs": [],
         "raw": "",
+        "type": "vanilla",
       },
     },
     "isError": True,
@@ -144,6 +146,7 @@ async def run(
     inputs=content["inputs"],
     raw=content["raw"],
     sync_state=content.get("sync_state"),
+    type=content.get("type", "vanilla"),
   )
   result = ReadNoteResult(note=note_content)
   facet_summary = []

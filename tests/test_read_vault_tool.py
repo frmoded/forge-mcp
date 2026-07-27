@@ -147,9 +147,12 @@ class TestReadNotesInVaultTool:
     # Every returned entry must be reshaped correctly.
     # `sync_state` added in drain 2026-07-23-1700 Phase 1; None for
     # these fixture notes which don't carry the frontmatter field.
+    # `type` added in drain 2026-07-26-1200; defaults to "vanilla"
+    # when frontmatter carries no `type` field.
     for entry in notes:
       assert set(entry.keys()) == {
-        "note_id", "name", "path", "has_recipe", "recipe_version", "sync_state",
+        "note_id", "name", "path", "has_recipe", "recipe_version",
+        "sync_state", "type",
       }
 
   @pytest.mark.asyncio
