@@ -221,6 +221,7 @@ def _make_server(
     source: str,
     domains: list[str] | None = None,
     resolve_slot: dict[str, str] | None = None,
+    vault: str | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -236,7 +237,13 @@ def _make_server(
     # the value never reached the adapter.
     if resolve_slot is not None:
       args["resolve_slot"] = resolve_slot
-    result = await run_recipe.run(arguments=args, bearer=bearer)
+    # Drain 2026-07-27-1400 — vault param resolves wikilink closures
+    # via VaultRegistry; passed through to tools/run_recipe.py::run.
+    if vault is not None:
+      args["vault"] = vault
+    result = await run_recipe.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
     return _to_call_tool_result(result)
 
   @server.tool(

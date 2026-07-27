@@ -186,6 +186,7 @@ class ForgeServiceClient:
   async def run_recipe(
     self, source: str, bearer: str, domains: list[str] | None = None,
     resolve_slot: dict[str, str] | None = None,
+    vault_notes: list[dict] | None = None,
   ) -> RunResult:
     """Compile + execute an E-- Recipe in forge-transpile's sandbox.
 
@@ -209,6 +210,12 @@ class ForgeServiceClient:
     body: dict = {"source": source, "domains": domains or ["music"]}
     if resolve_slot:
       body["resolve_slot"] = resolve_slot
+    # Drain 2026-07-27-1400 — thread vault-note payload when the
+    # tool-layer resolved a vault + closure. Empty / None omits the
+    # field so pre-v0.2.6 forge-transpile installs (that don't know
+    # the field) still parse the body.
+    if vault_notes:
+      body["vault_notes"] = vault_notes
     client = await self._client_or_ephemeral()
     try:
       resp = await client.post(

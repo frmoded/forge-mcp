@@ -15,6 +15,8 @@ from ..forge_service_client import (
   ForgeServiceHTTPError,
 )
 from ..schemas import RunResult
+from ..vault_note_closure import CircularVaultNoteError, build_vault_note_closure
+from ..vault_registry import VaultNotFoundError, VaultRegistry
 
 TOOL_NAME = "forge_run_recipe"
 
@@ -49,6 +51,20 @@ INPUT_SCHEMA: dict[str, Any] = {
         "Optional map of slot-id -> resolved Python snippet. Splices "
         "each snippet into its slot location before sandbox execution. "
         "Omit for recipes with no slots."
+      ),
+    },
+    # Drain 2026-07-27-1400 (CW-forge-run-recipe-vault-note-invocation-
+    # arch-b-pivot) — resolve vault-note wikilinks in `source` against
+    # the driver's local vault. Every referenced vault action-note gets
+    # packaged (transitively) + shipped to forge-transpile's /run so it
+    # transpiles + splices them into the sandbox preamble.
+    "vault": {
+      "type": "string",
+      "description": (
+        "Optional vault name (from forge_list_vaults). When set, "
+        "wikilinks `[[note_name]]` in `source` are resolved against "
+        "the named vault + shipped alongside the request. Omit to "
+        "keep engine-lib-only resolution (current behavior)."
       ),
     },
   },
@@ -125,6 +141,7 @@ async def run(
   arguments: dict[str, Any],
   bearer: str,
   client: ForgeServiceClient | None = None,
+  vault_registry: VaultRegistry | None = None,
 ) -> dict[str, Any]:
   """Execute the tool. Returns MCP tool-result shape.
 
@@ -166,6 +183,45 @@ async def run(
   else:
     resolve_slot = None
 
+  # Drain 2026-07-27-1400 — vault-note closure. When `vault` is set,
+  # extract wikilinks in `source`, walk the closure through
+  # VaultRegistry-resolved VaultFS, package each action note's
+  # Recipe + inputs. Cycles surface as an isError with a clear
+  # path listing.
+  vault_name = arguments.get("vault")
+  vault_notes: list[dict] = []
+  if isinstance(vault_name, str) and vault_name.strip():
+    if vault_registry is None:
+      return {
+        "content": [
+          {
+            "type": "text",
+            "text": (
+              "vault= was set but no vault registry is available; "
+              "check FORGE_VAULTS env config."
+            ),
+          }
+        ],
+        "structuredContent": {"parse_status": "parse_error", "run_id": ""},
+        "isError": True,
+      }
+    try:
+      vault_fs = vault_registry.get(vault_name)
+    except VaultNotFoundError as exc:
+      return {
+        "content": [{"type": "text", "text": str(exc)}],
+        "structuredContent": {"parse_status": "parse_error", "run_id": ""},
+        "isError": True,
+      }
+    try:
+      vault_notes = build_vault_note_closure(source, vault_fs)
+    except CircularVaultNoteError as exc:
+      return {
+        "content": [{"type": "text", "text": str(exc)}],
+        "structuredContent": {"parse_status": "parse_error", "run_id": ""},
+        "isError": True,
+      }
+
   owns_client = client is None
   if client is None:
     client = ForgeServiceClient()
@@ -176,6 +232,7 @@ async def run(
       result: RunResult = await client.run_recipe(
         source=source, bearer=bearer, domains=domains,
         resolve_slot=resolve_slot,
+        vault_notes=vault_notes or None,
       )
     except ForgeServiceEndpointMissing as exc:
       return {
