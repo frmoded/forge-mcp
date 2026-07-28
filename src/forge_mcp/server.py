@@ -54,6 +54,7 @@ from .tools import (
   register_vault,
   rename_note,
   run_recipe,
+  save_image_from_url,
   unregister_vault,
 )
 from .vault_fs import VaultFS, VaultFSError
@@ -556,6 +557,45 @@ def _make_server(
     if vault is not None:
       args["vault"] = vault
     result = await create_markdown_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  # ---------------------------------------------------------------------------
+  # Image asset download (CW-forge-mcp-save-image-from-url-tool,
+  # drain 2026-07-28-1400) — download an HTTP(S) URL, validate content-
+  # type + size, save into a vault at a caller-specified relative path.
+  # For vanilla theory notes that embed images via ![[path]].
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=save_image_from_url.TOOL_NAME,
+    description=save_image_from_url.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_save_image_from_url(
+    ctx: Context,
+    url: str,
+    target_path: str,
+    vault: str | None = None,
+    overwrite: bool | None = None,
+    insecure: bool | None = None,
+    max_size_mb: float | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"url": url, "target_path": target_path}
+    if vault is not None:
+      args["vault"] = vault
+    if overwrite is not None:
+      args["overwrite"] = overwrite
+    if insecure is not None:
+      args["insecure"] = insecure
+    if max_size_mb is not None:
+      args["max_size_mb"] = max_size_mb
+    result = await save_image_from_url.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)
