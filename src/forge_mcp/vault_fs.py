@@ -181,6 +181,29 @@ def _extract_inputs(frontmatter_dict: dict[str, str], description_body: str) -> 
   return []
 
 
+def _render_inputs_yaml(inputs: list[str]) -> str:
+  """Render a list of input names as inline YAML `[a, b, c]`.
+
+  CW-forge-mcp-commit-recipe-accept-inputs-param (drain 2026-07-27-2005).
+
+  Matches the shape `create_note_shell` uses (`inputs: []`) so authored
+  inputs from `commit_recipe(inputs=...)` are byte-compatible with the
+  plugin's read path + drain 1730's introspector.
+  """
+  if not inputs:
+    return "[]"
+  # Quote names that aren't bare identifiers; bare identifiers stay
+  # unquoted for readability (matches how the plugin writes them).
+  parts: list[str] = []
+  for name in inputs:
+    if re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name):
+      parts.append(name)
+    else:
+      # Fall back to JSON-safe quoting for non-identifier names.
+      parts.append(f'"{name}"')
+  return "[" + ", ".join(parts) + "]"
+
+
 def _update_frontmatter_line(text: str, key: str, value: str) -> str:
   """Replace `key: <old>` with `key: <value>`; append if key not present.
   Preserves everything else in the block byte-for-byte."""
@@ -351,7 +374,10 @@ def extract_all_facets(raw: str) -> dict[str, str]:
   return facets
 
 
-def splice_recipe(raw: str, new_recipe_body: str, new_version: int) -> str:
+def splice_recipe(
+  raw: str, new_recipe_body: str, new_version: int,
+  *, inputs: list[str] | None = None,
+) -> str:
   """Return `raw` with the Recipe facet body replaced by
   `new_recipe_body` and `recipe_version: {new_version}` stamped in the
   frontmatter. Byte-for-byte-preserves everything else — including
@@ -379,6 +405,15 @@ def splice_recipe(raw: str, new_recipe_body: str, new_version: int) -> str:
   new_frontmatter_text = _update_frontmatter_line(
     parsed.frontmatter_text, "recipe_version", str(new_version)
   )
+  # CW-forge-mcp-commit-recipe-accept-inputs-param (drain 2026-07-27-2005).
+  # When caller provided `inputs`, overwrite the `inputs:` line in
+  # frontmatter (creating it if absent). When None, leave existing
+  # frontmatter `inputs:` untouched — back-compat with pre-drain
+  # callers that never passed the param.
+  if inputs is not None:
+    new_frontmatter_text = _update_frontmatter_line(
+      new_frontmatter_text, "inputs", _render_inputs_yaml(inputs)
+    )
 
   # Rebuild the frontmatter block.
   if new_frontmatter_text or parsed.frontmatter_text:
@@ -542,6 +577,7 @@ class VaultFS:
     expected_version: int | None,
     *,
     git_message: str | None = None,
+    inputs: list[str] | None = None,
   ) -> tuple[int, str | None]:
     """Splice `new_recipe_body` into the note's Recipe facet, stamp
     `recipe_version: current+1`, write atomically. If the vault is git-
@@ -567,8 +603,16 @@ class VaultFS:
     if not path.exists():
       # Fresh note — bypass version check (there's no existing version).
       new_version = 1
+      # CW-forge-mcp-commit-recipe-accept-inputs-param
+      # (drain 2026-07-27-2005). When caller passes `inputs`, stamp
+      # frontmatter `inputs: [...]` at note-creation time; when None,
+      # omit the field entirely (older callers that never populated
+      # inputs still produce byte-equivalent notes).
+      inputs_line = ""
+      if inputs is not None:
+        inputs_line = f"inputs: {_render_inputs_yaml(inputs)}\n"
       content = (
-        f"---\nrecipe_version: {new_version}\n---\n"
+        f"---\n{inputs_line}recipe_version: {new_version}\n---\n"
         f"\n# Description\n\n\n# Recipe\n\n{new_recipe_body.rstrip()}\n"
       )
       path.parent.mkdir(parents=True, exist_ok=True)
@@ -579,7 +623,12 @@ class VaultFS:
         raise VersionConflict(note_id, expected_version, current)
       new_version = current + 1
       raw = self.read_note(note_id)
-      new_content = splice_recipe(raw, new_recipe_body, new_version)
+      # CW-forge-mcp-commit-recipe-accept-inputs-param — thread `inputs`
+      # through the splicer. When None, splicer leaves the existing
+      # `inputs:` line untouched (back-compat with pre-drain callers).
+      new_content = splice_recipe(
+        raw, new_recipe_body, new_version, inputs=inputs,
+      )
       _atomic_write(path, new_content)
 
     git_sha: str | None = None

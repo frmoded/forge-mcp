@@ -85,6 +85,21 @@ INPUT_SCHEMA: dict[str, Any] = {
       ),
       "maxLength": 500,
     },
+    "inputs": {
+      "type": ["array", "null"],
+      "items": {"type": "string"},
+      "description": (
+        "Optional list of input parameter names to stamp into the "
+        "note's frontmatter `inputs:` field. When provided, "
+        "overwrites the existing frontmatter inputs. When null/"
+        "omitted (default), leaves existing frontmatter `inputs:` "
+        "untouched — pre-drain-2005 back-compat. Required for "
+        "wizard-authored interactive-exercise notes whose input "
+        "names only appear inside `{{ }}` slots (invisible to "
+        "auto-derivation). Names should be bare Python identifiers "
+        "(`[A-Za-z_][A-Za-z0-9_]*`)."
+      ),
+    },
   },
 }
 
@@ -150,6 +165,19 @@ async def run(
   expected_version = arguments.get("expected_version")
   vault_name = arguments.get("vault")
   message = arguments.get("message")
+  # CW-forge-mcp-commit-recipe-accept-inputs-param (drain 2026-07-27-2005).
+  # Validate: must be list-of-string or None. Empty list is valid (means
+  # "no inputs" — writes `inputs: []`). None means "don't touch existing
+  # frontmatter inputs" (back-compat).
+  inputs_arg = arguments.get("inputs")
+  if inputs_arg is not None:
+    if not isinstance(inputs_arg, list) or not all(
+      isinstance(n, str) for n in inputs_arg
+    ):
+      return _error(
+        "'inputs' must be a list of strings or omitted.",
+        note_id=str(note_id or ""),
+      )
 
   # Drain §5 test #5 — missing/malformed note_id (tool-input validation
   # BEFORE any fs touching).
@@ -221,6 +249,7 @@ async def run(
       new_recipe_body=source,
       expected_version=expected_version,
       git_message=message,
+      inputs=inputs_arg,
     )
   except NoteIdInvalid as exc:
     return _error(f"Invalid note_id: {exc}", note_id=note_id)

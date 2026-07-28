@@ -311,6 +311,7 @@ def _make_server(
     expected_version: int | None = None,
     vault: str | None = None,
     message: str | None = None,
+    inputs: list[str] | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -323,6 +324,11 @@ def _make_server(
       args["vault"] = vault
     if message is not None:
       args["message"] = message
+    # CW-forge-mcp-commit-recipe-accept-inputs-param (drain 2026-07-27-2005).
+    # None means "leave existing frontmatter inputs untouched"; empty
+    # list means "clear to inputs: []". The tool-layer distinguishes.
+    if inputs is not None:
+      args["inputs"] = inputs
     result = await commit_recipe.run(
       arguments=args,
       bearer=bearer,
