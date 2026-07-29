@@ -8,9 +8,12 @@ sends pitch list + target vault path; this tool POSTs forge-transpile's
 the pitches to MIDI bytes), decodes the returned base64, and writes
 the .mid file into the target vault at `target_path` atomically.
 
-MVP: format='midi' only. format='svg' returns a clear "pending LilyPond
-binary deployment" error so the deferral is visible at the tool
-surface too.
+Formats:
+- 'midi' — drain 2026-07-29-1000. music21 MIDI writer, no binary dep.
+- 'svg'  — drain 2026-07-29-1500. music21 ConverterLilypond shells to
+  the `lilypond` binary on forge-transpile's EC2 host (installed via
+  deploy/user-data.sh). If missing, server returns 500 with a
+  targeted message and we surface it verbatim.
 
 Safety:
 - Path traversal: reject `..`, absolute paths, hidden segments.
@@ -122,13 +125,15 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 
 DESCRIPTION = (
   "Render a music21 pitch list to an audio/notation file and save it "
-  "into a vault at target_path. MVP MIDI-only (format='midi'); "
-  "format='svg' returns a clear 'not yet implemented' error pending "
-  "LilyPond binary deployment. Path traversal / hidden segments / "
-  "extension mismatch / overwrite / oversized downloads are all "
-  "rejected. Wizard uses this to embed audio into vanilla theory "
-  "notes via ![[<path>]] wikilinks. Cohort clicks the embed in "
-  "Obsidian to audition through their system MIDI player."
+  "into a vault at target_path. Supports format='midi' (audio, via "
+  "music21 MIDI writer) and format='svg' (staff notation, via music21 "
+  "ConverterLilypond shelling to the `lilypond` binary on the "
+  "forge-transpile host). Path traversal / hidden segments / extension "
+  "mismatch (.mid|.midi for midi, .svg for svg) / overwrite / oversized "
+  "downloads are all rejected. Wizard uses this to embed audio + staff "
+  "notation into vanilla theory notes via ![[<path>]] wikilinks. Cohort "
+  "clicks a MIDI embed to audition through their system player; SVG "
+  "renders inline in Obsidian."
 )
 
 
@@ -210,12 +215,11 @@ async def run(
       + ", ".join(sorted(_ALLOWED_FORMATS)),
       fmt=fmt,
     )
-  if fmt == "svg":
-    return _error(
-      "format='svg' is not yet implemented — pending LilyPond binary "
-      "deployment. Use format='midi' for MVP.",
-      fmt=fmt,
-    )
+  # CW-forge-transpile-render-music-svg-format (drain 2026-07-29-1500):
+  # SVG short-circuit removed. Pass through to forge-transpile v0.2.9+,
+  # which shells to the `lilypond` binary via music21's
+  # ConverterLilypond. Server returns 500 with a targeted "LilyPond
+  # binary missing" message if the deploy env doesn't have lilypond.
   try:
     max_size_mb = float(max_size_mb_raw)
     if max_size_mb <= 0:
@@ -310,6 +314,18 @@ async def run(
     if resp.status_code == 401 or resp.status_code == 403:
       return _error(
         f"forge-transpile auth failed ({resp.status_code}). Check FORGE_MCP_BEARER.",
+        vault=vault_name, fmt=fmt,
+      )
+    if resp.status_code == 500:
+      # Drain 1500: LilyPond binary missing surfaces here with a
+      # targeted detail message. Surface it verbatim so ops sees the
+      # config drift immediately rather than a generic HTTP error.
+      try:
+        detail = resp.json().get("detail", "")
+      except Exception:  # noqa: BLE001
+        detail = resp.text
+      return _error(
+        f"forge-transpile /render-music returned 500: {detail[:400]}",
         vault=vault_name, fmt=fmt,
       )
     if resp.status_code >= 400:

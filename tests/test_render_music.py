@@ -77,24 +77,73 @@ async def test_renders_midi_scale_and_writes_to_vault(single_vault_registry: Vau
 
 
 @pytest.mark.asyncio
-async def test_refuses_svg_with_deferral_message(single_vault_registry: VaultRegistry):
-  """Acceptance #4: format='svg' returns clear 'not yet implemented' error."""
-  result = await render_music.run(
-    arguments={
-      "pitches": _C_MAJOR,
-      "target_path": "music_theory/svg/c_major.svg",
-      "format": "svg",
-    },
-    bearer="tok",
-    vault_registry=single_vault_registry,
-  )
-  assert result["isError"] is True
-  text = result["content"][0]["text"]
-  assert "not yet implemented" in text
-  assert "LilyPond" in text
-  # No HTTP call made and no file written.
+async def test_svg_passes_through_to_transpile(single_vault_registry: VaultRegistry):
+  """CW-forge-transpile-render-music-svg-format (drain 2026-07-29-1500):
+  format='svg' no longer short-circuits at the tool layer. It now POSTs
+  /render-music and expects real SVG bytes. This test mocks the transpile
+  side (real LilyPond invocation is verified end-to-end post-deploy on
+  EC2 where the binary is installed via deploy/user-data.sh)."""
+  fake_svg = b"<?xml version=\"1.0\"?><svg xmlns=\"http://www.w3.org/2000/svg\"><g/></svg>"
+  fake_response = {
+    "format": "svg",
+    "content_type": "image/svg+xml",
+    "size_bytes": len(fake_svg),
+    "sha256": hashlib.sha256(fake_svg).hexdigest(),
+    "data_b64": base64.b64encode(fake_svg).decode("ascii"),
+  }
+  async with respx.mock(base_url="https://transpile.test") as mock:
+    mock.post("/render-music").mock(
+      return_value=httpx.Response(200, json=fake_response),
+    )
+    async with httpx.AsyncClient() as client:
+      result = await render_music.run(
+        arguments={
+          "pitches": _C_MAJOR,
+          "target_path": "music_theory/svg/c_major.svg",
+          "format": "svg",
+        },
+        bearer="tok",
+        vault_registry=single_vault_registry,
+        client=client,
+      )
+  assert result["isError"] is False, result
   vault_fs = single_vault_registry.get()
-  assert list(vault_fs.root.rglob("*")) == []
+  saved = vault_fs.root / "music_theory" / "svg" / "c_major.svg"
+  assert saved.is_file()
+  head = saved.read_bytes()[:5].decode("utf-8", errors="replace").lower()
+  assert head.startswith("<?xml") or head.startswith("<svg"), (
+    f"expected SVG magic (<?xml or <svg), got {head!r}"
+  )
+  assert result["structuredContent"]["format"] == "svg"
+
+
+@pytest.mark.asyncio
+async def test_svg_binary_missing_returns_targeted_error(single_vault_registry: VaultRegistry):
+  """When forge-transpile returns 500 with a LilyPond-binary-missing
+  message, wrap it clearly at the tool layer so ops sees the config
+  drift."""
+  async with respx.mock(base_url="https://transpile.test") as mock:
+    mock.post("/render-music").mock(
+      return_value=httpx.Response(
+        500,
+        json={"detail": "LilyPond binary missing or misconfigured in transpile env (format='svg')"},
+      ),
+    )
+    async with httpx.AsyncClient() as client:
+      result = await render_music.run(
+        arguments={
+          "pitches": _C_MAJOR,
+          "target_path": "music_theory/svg/x.svg",
+          "format": "svg",
+        },
+        bearer="tok",
+        vault_registry=single_vault_registry,
+        client=client,
+      )
+  assert result["isError"] is True
+  # The tool's existing HTTP-error paths surface transpile's message.
+  text = result["content"][0]["text"]
+  assert "LilyPond" in text or "500" in text
 
 
 @pytest.mark.asyncio
