@@ -56,6 +56,7 @@ from .tools import (
   run_recipe,
   save_image_from_url,
   unregister_vault,
+  write_message,
 )
 from .vault_fs import VaultFS, VaultFSError
 from .vault_registry import VaultRegistry, VaultRegistryError
@@ -567,6 +568,44 @@ def _make_server(
   # type + size, save into a vault at a caller-specified relative path.
   # For vanilla theory notes that embed images via ![[path]].
   # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # Cross-cowork messaging (CW-forge-mcp-write-message-tool,
+  # drain 2026-07-29-0900) — writes markdown files under
+  # $FORGE_MCP_MESSAGES_ROOT (default ~/projects/forge-moda-bootstrap/
+  # messages/). Gives blind-lane wizard a scoped write channel matching
+  # CCQA's existing file-based messaging convention.
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=write_message.TOOL_NAME,
+    description=write_message.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_write_message(
+    ctx: Context,
+    to: str,
+    body: str,
+    from_: str | None = None,
+    slug: str | None = None,
+    max_size_kb: float | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"to": to, "body": body}
+    # Accept both `from` (JSON-schema name, MCP-facing) and `from_`
+    # (Python reserved-word workaround) — FastMCP surfaces the schema
+    # via this signature so `from_` is the callable kwarg name.
+    if from_ is not None:
+      args["from"] = from_
+    if slug is not None:
+      args["slug"] = slug
+    if max_size_kb is not None:
+      args["max_size_kb"] = max_size_kb
+    result = await write_message.run(arguments=args, bearer=bearer)
+    return _to_call_tool_result(result)
 
   @server.tool(
     name=save_image_from_url.TOOL_NAME,
