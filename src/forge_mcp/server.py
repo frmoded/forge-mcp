@@ -50,6 +50,7 @@ from .tools import (
   list_vaults,
   read_note,
   read_note_catalog,
+  read_messages,
   read_notes_in_vault,
   register_vault,
   rename_note,
@@ -622,6 +623,61 @@ def _make_server(
   # messages/). Gives blind-lane wizard a scoped write channel matching
   # CCQA's existing file-based messaging convention.
   # ---------------------------------------------------------------------------
+
+  # ---------------------------------------------------------------------------
+  # Read half of the cross-cowork messaging channel
+  # (CW-forge-mcp-read-message-tool, drain 2026-07-29-1300). Companion to
+  # forge_write_message. Wizard reads its own inbox — replies from
+  # forge-reviewer, requests from driver — without driver copy-paste.
+  # Read-tracking: move file to `done/` (matches existing CCQA convention).
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=read_messages.TOOL_READ_NAME,
+    description=read_messages.READ_DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_read_messages(
+    ctx: Context,
+    to: str,
+    since: str | None = None,
+    unread_only: bool | None = None,
+    limit: int | None = None,
+    max_body_kb: float | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"to": to}
+    if since is not None:
+      args["since"] = since
+    if unread_only is not None:
+      args["unread_only"] = unread_only
+    if limit is not None:
+      args["limit"] = limit
+    if max_body_kb is not None:
+      args["max_body_kb"] = max_body_kb
+    result = await read_messages.run_read(arguments=args, bearer=bearer)
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=read_messages.TOOL_MARK_NAME,
+    description=read_messages.MARK_DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_mark_message_read(
+    ctx: Context,
+    path: str,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    result = await read_messages.run_mark(
+      arguments={"path": path}, bearer=bearer,
+    )
+    return _to_call_tool_result(result)
 
   @server.tool(
     name=write_message.TOOL_NAME,
