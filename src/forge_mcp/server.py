@@ -53,6 +53,7 @@ from .tools import (
   read_notes_in_vault,
   register_vault,
   rename_note,
+  render_music,
   run_recipe,
   save_image_from_url,
   unregister_vault,
@@ -558,6 +559,51 @@ def _make_server(
     if vault is not None:
       args["vault"] = vault
     result = await create_markdown_note.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  # ---------------------------------------------------------------------------
+  # Music rendering (CW-forge-mcp-render-music-tool, drain 2026-07-29-1000)
+  # — POSTs forge-transpile's /render-music, decodes the base64 MIDI
+  # payload, and writes it into the target vault at target_path. MVP
+  # MIDI-only; SVG deferred pending LilyPond binary deployment.
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=render_music.TOOL_NAME,
+    description=render_music.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_render_music(
+    ctx: Context,
+    pitches: list[str],
+    target_path: str,
+    vault: str | None = None,
+    format: str | None = None,
+    tempo_bpm: int | None = None,
+    duration_quarters: float | None = None,
+    overwrite: bool | None = None,
+    max_size_mb: float | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"pitches": pitches, "target_path": target_path}
+    if vault is not None:
+      args["vault"] = vault
+    if format is not None:
+      args["format"] = format
+    if tempo_bpm is not None:
+      args["tempo_bpm"] = tempo_bpm
+    if duration_quarters is not None:
+      args["duration_quarters"] = duration_quarters
+    if overwrite is not None:
+      args["overwrite"] = overwrite
+    if max_size_mb is not None:
+      args["max_size_mb"] = max_size_mb
+    result = await render_music.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)
