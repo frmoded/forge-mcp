@@ -48,10 +48,15 @@ TOOL_NAME = "forge_render_music"
 _DEFAULT_MAX_SIZE_MB = 5.0
 _HTTP_TIMEOUT_SECONDS = 30.0
 
-_ALLOWED_FORMATS = {"midi", "svg"}
+_ALLOWED_FORMATS = {"midi", "svg", "mp3"}
 _FORMAT_EXTENSIONS = {
   "midi": {".mid", ".midi"},
   "svg": {".svg"},
+  # CW-forge-transpile-render-music-mp3-format (drain 2026-07-29-1600):
+  # MP3 is the inline-playable audio format for Obsidian's `<audio>`
+  # embed. Wizard uses ![[<path>.mp3]] to give cohorts click-to-hear
+  # without leaving Obsidian.
+  "mp3": {".mp3"},
 }
 
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\- ]*$")
@@ -73,7 +78,7 @@ INPUT_SCHEMA: dict[str, Any] = {
       "type": "string",
       "description": (
         "Vault-relative path (e.g. 'music_theory/audio/c_major_scale.mid'). "
-        "Extension must match format (.mid/.midi for midi, .svg for svg). "
+        "Extension must match format (.mid/.midi for midi, .svg for svg, .mp3 for mp3). "
         "No absolute paths, no '..' segments, no hidden segments."
       ),
     },
@@ -85,7 +90,7 @@ INPUT_SCHEMA: dict[str, Any] = {
     },
     "format": {
       "type": "string",
-      "description": "'midi' (MVP) or 'svg' (deferred — LilyPond binary pending). Default 'midi'.",
+      "description": "'midi' (MIDI, system-player playback), 'svg' (staff notation, inline in Obsidian), or 'mp3' (inline-playable audio via Obsidian <audio> embed). Default 'midi'.",
     },
     "tempo_bpm": {
       "type": "integer",
@@ -125,15 +130,18 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 
 DESCRIPTION = (
   "Render a music21 pitch list to an audio/notation file and save it "
-  "into a vault at target_path. Supports format='midi' (audio, via "
-  "music21 MIDI writer) and format='svg' (staff notation, via music21 "
-  "ConverterLilypond shelling to the `lilypond` binary on the "
-  "forge-transpile host). Path traversal / hidden segments / extension "
-  "mismatch (.mid|.midi for midi, .svg for svg) / overwrite / oversized "
-  "downloads are all rejected. Wizard uses this to embed audio + staff "
-  "notation into vanilla theory notes via ![[<path>]] wikilinks. Cohort "
-  "clicks a MIDI embed to audition through their system player; SVG "
-  "renders inline in Obsidian."
+  "into a vault at target_path. Supports format='midi' (system-player "
+  "audio, via music21 MIDI writer), format='svg' (staff notation, via "
+  "music21 ConverterLilypond shelling to the `lilypond` binary on the "
+  "forge-transpile host), and format='mp3' (inline-playable audio, "
+  "via a MIDI → fluidsynth → ffmpeg pipeline on the forge-transpile "
+  "host). Path traversal / hidden segments / extension mismatch "
+  "(.mid|.midi for midi, .svg for svg, .mp3 for mp3) / overwrite / "
+  "oversized downloads are all rejected. Wizard uses this to embed "
+  "audio + staff notation into vanilla theory notes via ![[<path>]] "
+  "wikilinks. Cohort clicks a MIDI embed to audition through their "
+  "system player; SVG renders inline; MP3 renders inline as a "
+  "<audio> player Obsidian shows in preview."
 )
 
 

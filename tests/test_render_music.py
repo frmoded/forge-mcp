@@ -147,6 +147,66 @@ async def test_svg_binary_missing_returns_targeted_error(single_vault_registry: 
 
 
 @pytest.mark.asyncio
+async def test_mp3_passes_through_to_transpile(single_vault_registry: VaultRegistry):
+  """CW-forge-transpile-render-music-mp3-format (drain 2026-07-29-1600):
+  format='mp3' is accepted at the tool layer + POSTs /render-music.
+  Real fluidsynth + ffmpeg invocation is verified end-to-end post-
+  deploy on EC2 where the binaries + soundfont are installed via
+  deploy/user-data.sh."""
+  # ID3v2 header + a minimal MPEG frame — enough for the tool's
+  # save + integrity check.
+  fake_mp3 = b"ID3\x04\x00\x00\x00\x00\x00\x00" + b"\xff\xfb\x90\x00" + b"\x00" * 128
+  fake_response = {
+    "format": "mp3",
+    "content_type": "audio/mpeg",
+    "size_bytes": len(fake_mp3),
+    "sha256": hashlib.sha256(fake_mp3).hexdigest(),
+    "data_b64": base64.b64encode(fake_mp3).decode("ascii"),
+  }
+  async with respx.mock(base_url="https://transpile.test") as mock:
+    mock.post("/render-music").mock(
+      return_value=httpx.Response(200, json=fake_response),
+    )
+    async with httpx.AsyncClient() as client:
+      result = await render_music.run(
+        arguments={
+          "pitches": _C_MAJOR,
+          "target_path": "music_theory/audio/c_major_scale.mp3",
+          "format": "mp3",
+        },
+        bearer="tok",
+        vault_registry=single_vault_registry,
+        client=client,
+      )
+  assert result["isError"] is False, result
+  vault_fs = single_vault_registry.get()
+  saved = vault_fs.root / "music_theory" / "audio" / "c_major_scale.mp3"
+  assert saved.is_file()
+  data = saved.read_bytes()
+  assert data[:3] == b"ID3", f"expected ID3 magic, got {data[:4]!r}"
+  assert result["structuredContent"]["format"] == "mp3"
+
+
+@pytest.mark.asyncio
+async def test_mp3_refuses_non_mp3_extension(single_vault_registry: VaultRegistry):
+  """Acceptance #6 (drain 1600): format='mp3' with non-.mp3 target_path
+  is rejected at the tool layer before any HTTP call."""
+  result = await render_music.run(
+    arguments={
+      "pitches": _C_MAJOR,
+      "target_path": "music_theory/audio/c_major_scale.wav",
+      "format": "mp3",
+    },
+    bearer="tok",
+    vault_registry=single_vault_registry,
+  )
+  assert result["isError"] is True
+  text = result["content"][0]["text"]
+  assert "mp3" in text.lower()
+  assert "extension" in text.lower() or "target_path" in text.lower()
+
+
+@pytest.mark.asyncio
 async def test_refuses_path_traversal(single_vault_registry: VaultRegistry):
   """Acceptance #5: `../../../etc/x.mid` rejected before any HTTP call."""
   result = await render_music.run(
