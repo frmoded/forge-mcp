@@ -760,11 +760,32 @@ class VaultFS:
     Description. NO Recipe facet — that's commit_recipe's job.
 
     CW-create-note-shell-v2a-frontmatter — writes the canonical V2a
-    frontmatter fields (`type: action`, `inputs: []`, `recipe_version:
-    0`) so the plugin's editor-attribute facet detects the note as a
-    Forge action note (via `type: action`), and so that a subsequent
-    `commit_recipe` call's `splice_recipe` can merge the version stamp
-    in-place instead of prepending a duplicate frontmatter block.
+    frontmatter fields (`type: action`, `inputs: []`) so the plugin's
+    editor-attribute facet detects the note as a Forge action note (via
+    `type: action`), and so that a subsequent `commit_recipe` call's
+    `splice_recipe` can merge the version stamp in-place instead of
+    prepending a duplicate frontmatter block.
+
+    CW-forge-mcp-drop-recipe-version-shell-marker (drain
+    2026-07-29-2305) — the `recipe_version: 0` stamp is no longer
+    written. It read as a semantic version marker but carried no
+    information: `current_recipe_version` already defaults a MISSING
+    stamp to 0 (see that method), so `recipe_version: 0` and no stamp
+    at all are indistinguishable to every reader. `splice_recipe` bumps
+    to 1 on the first commit either way, because
+    `_update_frontmatter_line` appends the key when it is absent.
+
+    IMPORTANT — this does NOT mean `recipe_version` is inert. The field
+    is the optimistic-concurrency token for `commit_recipe`
+    (`expected_version` compare-and-set, `committed_version` in the
+    response schema, `current_recipe_version` reader). Only the
+    redundant zero-stamp on a brand-new shell went away. Do not
+    "clean up" the field itself.
+
+    The in-place-merge guarantee named above still holds: the shell
+    keeps `type: action` + `inputs: []`, so a frontmatter block exists
+    and `splice_recipe` takes its merge branch rather than synthesizing
+    a fresh block.
 
     Fails cleanly if the note already exists (raises NoteExists). Does
     NOT overwrite. If the parent directory doesn't exist, it is created
@@ -784,7 +805,6 @@ class VaultFS:
       "---\n"
       "type: action\n"
       "inputs: []\n"
-      "recipe_version: 0\n"
       "---\n"
     )
     if desc_body:

@@ -133,8 +133,14 @@ async def test_create_note_shell_writes_v2a_frontmatter(
 ):
   """§5 test #1 — the shell writes proper V2a frontmatter so the plugin
   detects it as a Forge action note. The exact opening block must be
-  the canonical shape (`type: action`, `inputs: []`, `recipe_version:
-  0`) to satisfy the plugin's `type: action | data` gate."""
+  the canonical shape (`type: action`, `inputs: []`) to satisfy the
+  plugin's `type: action | data` gate.
+
+  CW-forge-mcp-drop-recipe-version-shell-marker (drain
+  2026-07-29-2305): `recipe_version: 0` is no longer stamped — it was
+  indistinguishable from a missing stamp to every reader
+  (`current_recipe_version` defaults missing to 0). See
+  `test_shell_omits_recipe_version_stamp` below."""
   await create_note.run(
     arguments={"note_id": "mytest/greeting", "description": "Say hi"},
     bearer="tok",
@@ -146,7 +152,6 @@ async def test_create_note_shell_writes_v2a_frontmatter(
     "---\n"
     "type: action\n"
     "inputs: []\n"
-    "recipe_version: 0\n"
     "---\n"
     "\n"
     "# Description\n"
@@ -154,6 +159,73 @@ async def test_create_note_shell_writes_v2a_frontmatter(
     "Say hi\n"
   )
   assert content == expected_prefix
+
+
+@pytest.mark.asyncio
+async def test_shell_omits_recipe_version_stamp(
+  single_vault_registry: VaultRegistry,
+):
+  """CW-forge-mcp-drop-recipe-version-shell-marker (drain
+  2026-07-29-2305) acceptance #2 — a fresh shell carries NO
+  `recipe_version` key, and the version still reads as 0.
+
+  The stamp was pure noise: it looked like a semantic version marker
+  but `current_recipe_version` already treats a missing stamp as 0, so
+  `recipe_version: 0` conveyed nothing a reader could act on.
+
+  This does NOT make the field inert — `recipe_version` is the
+  optimistic-concurrency token `commit_recipe` compares against via
+  `expected_version`. Only the redundant zero-stamp went away.
+  """
+  await create_note.run(
+    arguments={"note_id": "stampless", "description": "No stamp here."},
+    bearer="tok",
+    vault_registry=single_vault_registry,
+  )
+  vault_fs = single_vault_registry.get()
+  content = (vault_fs.root / "stampless.md").read_text()
+  assert "recipe_version" not in content
+  # The concurrency token still reads correctly for a fresh note.
+  assert vault_fs.current_recipe_version("stampless") == 0
+
+
+@pytest.mark.asyncio
+async def test_stampless_shell_survives_first_commit_recipe(
+  single_vault_registry: VaultRegistry,
+):
+  """CW-2305 acceptance #3 — end-to-end regression: shell (no stamp) →
+  commit_recipe → read back. `_update_frontmatter_line` appends the key
+  when absent, so the first commit stamps `recipe_version: 1` into the
+  EXISTING frontmatter block rather than prepending a duplicate one.
+  That in-place-merge guarantee is the reason the shell writes any
+  frontmatter at all; dropping the version stamp doesn't disturb it
+  because `type: action` + `inputs: []` still make a block.
+  """
+  await create_note.run(
+    arguments={"note_id": "committed", "description": "Say hello."},
+    bearer="tok",
+    vault_registry=single_vault_registry,
+  )
+  vault_fs = single_vault_registry.get()
+  assert vault_fs.current_recipe_version("committed") == 0
+
+  # expected_version=0 exercises the CAS path against a stampless
+  # note: the concurrency token must still compare correctly when the
+  # frontmatter key is absent.
+  new_version, _run_id = vault_fs.commit_recipe(
+    "committed", 'Return "hello".', 0)
+  assert new_version == 1
+
+  content = (vault_fs.root / "committed.md").read_text()
+  # Version stamped on first commit.
+  assert "recipe_version: 1" in content
+  assert vault_fs.current_recipe_version("committed") == 1
+  # EXACTLY one frontmatter block — no duplicate prepended.
+  assert content.count("---\n") == 2, content
+  # Pre-existing frontmatter + Description survived byte-wise.
+  assert "type: action" in content
+  assert "Say hello." in content
+  assert "# Recipe" in content
 
 
 @pytest.mark.asyncio
