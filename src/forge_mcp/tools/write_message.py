@@ -6,7 +6,7 @@ Wizard (blind lane) can't write files to `~/projects/forge-moda-bootstrap/
 messages/**`, so wizard → forge-core and wizard → forge-reviewer
 communication requires driver copy-paste. This tool gives wizard a
 scoped write channel matching the existing convention (CCQA writes to
-`messages/to-forge-core/from-ccqa/`, etc.). Symmetric access — any
+`messages/pending/to-forge-core/from-ccqa/`, etc.). Symmetric access — any
 cowork with forge-mcp can now message any whitelisted peer.
 
 Path: writes ONLY under `$FORGE_MCP_MESSAGES_ROOT`, default
@@ -239,7 +239,7 @@ async def run(
   iso_stamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
 
   root = _messages_root()
-  target_dir = root / f"to-{to_norm}" / f"from-{from_norm}"
+  target_dir = root / "pending" / f"to-{to_norm}" / f"from-{from_norm}"
 
   # Sanity: target_dir must live under root.
   try:

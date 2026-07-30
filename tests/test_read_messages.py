@@ -17,7 +17,7 @@ def _messages_root(tmp_path: Path, monkeypatch):
 
 
 def _write_msg(root: Path, to: str, from_: str, filename: str, body: str) -> Path:
-  d = root / f"to-{to}" / f"from-{from_}"
+  d = root / "pending" / f"to-{to}" / f"from-{from_}"
   d.mkdir(parents=True, exist_ok=True)
   p = d / filename
   p.write_text(body, encoding="utf-8")
@@ -69,7 +69,7 @@ async def test_unread_only_filters_after_mark_read(_messages_root: Path):
   assert result["isError"] is False, result
   assert result["structuredContent"]["total_count"] == 1
   assert result["structuredContent"]["messages"][0]["slug"] == "second"
-  # unread_only=False → both, m1 now under done/.
+  # unread_only=False → both, m1 now under read/.
   result_all = await read_messages.run_read(
     arguments={"to": "wizard", "unread_only": False},
     bearer="tok",
@@ -78,7 +78,11 @@ async def test_unread_only_filters_after_mark_read(_messages_root: Path):
   moved = next(
     m for m in result_all["structuredContent"]["messages"] if m["slug"] == "first"
   )
-  assert "/done/" in moved["path"]
+  assert "/read/to-wizard/from-forge-reviewer/" in moved["path"]
+  # Drain 1010: `from` survives being marked read — it comes from the
+  # from-<sender>/ dir, which the read/ mirror preserves. Under the old
+  # flat done/ this reported "(read/moved)".
+  assert moved["from"] == "forge-reviewer"
 
 
 @pytest.mark.asyncio
@@ -132,21 +136,29 @@ async def test_body_truncation_over_max_kb(_messages_root: Path):
 
 @pytest.mark.asyncio
 async def test_mark_read_moves_file_to_done(_messages_root: Path):
-  """Acceptance #7: mark_read moves file to done/. Idempotent."""
+  """Acceptance #5: mark_read moves pending/ → read/, PRESERVING the
+  to-<X>/from-<Y>/ structure. Idempotent.
+
+  Drain 1010: the old behaviour flattened into `to-<X>/done/`, which
+  destroyed sender attribution the moment a message was read. The
+  mirror-tree layout keeps from-<sender>/ on both sides, so this
+  asserts the full relative path, not just the parent name."""
   p = _write_msg(_messages_root, "wizard", "forge-reviewer",
                  "2026-07-29-0900-test.md", "body")
   assert p.is_file()
-  # First call: moves to done/.
+  # First call: moves to read/.
   result = await read_messages.run_mark(
     arguments={"path": str(p)}, bearer="tok",
   )
   assert result["isError"] is False, result
   assert result["structuredContent"]["marked_read"] is True
   new_path = Path(result["structuredContent"]["path"])
-  assert new_path.parent.name == "done"
+  assert new_path.relative_to(_messages_root).parts == (
+    "read", "to-wizard", "from-forge-reviewer", "2026-07-29-0900-test.md",
+  ), f"sender attribution lost: {new_path}"
   assert new_path.is_file()
   assert not p.exists()  # original moved
-  # Second call on the new path: idempotent (already in done/).
+  # Second call on the new path: idempotent (already in read/).
   result2 = await read_messages.run_mark(
     arguments={"path": str(new_path)}, bearer="tok",
   )
@@ -156,12 +168,16 @@ async def test_mark_read_moves_file_to_done(_messages_root: Path):
 
 @pytest.mark.asyncio
 async def test_mark_read_idempotent_when_source_moved_by_other(_messages_root: Path):
-  """Calling mark_read on the old from-*/ path after it's been moved
-  finds the moved copy in done/ and reports success."""
+  """Calling mark_read on the old pending/ path after it's been moved
+  finds the moved copy in read/ and reports success.
+
+  Drain 1010: the read/ mirror is from-<sender>-scoped, so the moved
+  copy keeps its sender — the lookup rebuilds the same to-/from- pair
+  under read/ rather than probing a flat done/."""
   p = _write_msg(_messages_root, "wizard", "forge-reviewer",
                  "2026-07-29-0900-test.md", "body")
   # Simulate someone else moving it first.
-  done_dir = _messages_root / "to-wizard" / "done"
+  done_dir = _messages_root / "read" / "to-wizard" / "from-forge-reviewer"
   done_dir.mkdir(parents=True)
   moved = done_dir / p.name
   p.rename(moved)

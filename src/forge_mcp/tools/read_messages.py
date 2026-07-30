@@ -7,21 +7,21 @@ now read its own inbox — critique replies from forge-reviewer, requests
 from driver, etc. — without driver copy-paste.
 
 Layout mirrors write side + existing CCQA convention:
-- Unread: `$FORGE_MCP_MESSAGES_ROOT/to-<to>/from-<from>/<date>-<slug>.md`
-- Read:   `$FORGE_MCP_MESSAGES_ROOT/to-<to>/done/<date>-<slug>.md`
+- Unread: `$FORGE_MCP_MESSAGES_ROOT/pending/to-<to>/from-<from>/<date>-<slug>.md`
+- Read:   `$FORGE_MCP_MESSAGES_ROOT/read/to-<to>/from-<from>/<date>-<slug>.md`
 
-Read-tracking chosen: **move to `done/`** (matches existing
-`messages/to-forge-core/done/` convention). `.read` sidecar rejected
+Read-tracking chosen: **move from `pending/` to `read/`** (matches existing
+`messages/read/to-forge-core/from-*/` convention). `.read` sidecar rejected
 because it would divide the state across two files and drift from what
 CCQA already does.
 
 Safety:
 - Whitelist `to` (same set as write_message).
-- Path-scoped reads only under $FORGE_MCP_MESSAGES_ROOT/to-<to>/.
+- Path-scoped reads only under $FORGE_MCP_MESSAGES_ROOT/pending/to-<to>/.
 - Body-size cap on return (500 KB default; larger truncated with
   `[TRUNCATED: <N> bytes]` marker).
 - `limit` cap at 100 per call.
-- `forge_mark_message_read` is idempotent (moving already-in-done is
+- `forge_mark_message_read` is idempotent (moving already-in-read is
   a no-op).
 """
 from __future__ import annotations
@@ -73,7 +73,7 @@ READ_INPUT_SCHEMA: dict[str, Any] = {
     },
     "unread_only": {
       "type": "boolean",
-      "description": "If true (default), only return unread messages (skip done/).",
+      "description": "If true (default), only return unread messages (skip read/).",
     },
     "limit": {
       "type": "integer",
@@ -98,9 +98,9 @@ READ_OUTPUT_SCHEMA: dict[str, Any] = {
 
 READ_DESCRIPTION = (
   "Read messages from a cowork's inbox. Lists files under "
-  "$FORGE_MCP_MESSAGES_ROOT/to-<to>/from-<from>/, optionally filtered "
+  "$FORGE_MCP_MESSAGES_ROOT/pending/to-<to>/from-<from>/, optionally filtered "
   "by `since` timestamp. `unread_only=True` (default) skips messages "
-  "already moved to done/. Sorted newest-first. Body-size cap: 500 KB "
+  "already moved to read/. Sorted newest-first. Body-size cap: 500 KB "
   "per message (larger truncated with marker). limit default 20, max 100. "
   "Whitelisted `to` values only."
 )
@@ -114,7 +114,7 @@ MARK_INPUT_SCHEMA: dict[str, Any] = {
       "type": "string",
       "description": (
         "Absolute path from a prior forge_read_messages result. Moves the "
-        "file to $FORGE_MCP_MESSAGES_ROOT/to-<to>/done/. Idempotent."
+        "file to $FORGE_MCP_MESSAGES_ROOT/read/to-<to>/from-<from>/. Idempotent."
       ),
     },
   },
@@ -131,9 +131,9 @@ MARK_OUTPUT_SCHEMA: dict[str, Any] = {
 
 MARK_DESCRIPTION = (
   "Mark a message as read by moving it from "
-  "$FORGE_MCP_MESSAGES_ROOT/to-<to>/from-<from>/<file>.md to "
-  "$FORGE_MCP_MESSAGES_ROOT/to-<to>/done/<file>.md. Idempotent — if the "
-  "file is already in done/ (or already moved), returns marked_read=true "
+  "$FORGE_MCP_MESSAGES_ROOT/pending/to-<to>/from-<from>/<file>.md to "
+  "$FORGE_MCP_MESSAGES_ROOT/read/to-<to>/from-<from>/<file>.md. Idempotent — if the "
+  "file is already in read/ (or already moved), returns marked_read=true "
   "without error. Path must be an absolute path under $FORGE_MCP_MESSAGES_ROOT."
 )
 
@@ -249,13 +249,16 @@ async def run_read(
     )
 
   root = _messages_root()
-  inbox_dir = root / f"to-{to_norm}"
-  # Nothing there? Return empty result cleanly — not an error.
-  if not inbox_dir.is_dir():
+  pending_dir = root / "pending" / f"to-{to_norm}"
+  read_dir = root / "read" / f"to-{to_norm}"
+  # Nothing in EITHER branch? Return empty result cleanly — not an
+  # error. Checking both matters: a recipient whose whole inbox has
+  # been read has no pending/ dir but is not "no inbox".
+  if not pending_dir.is_dir() and not read_dir.is_dir():
     return {
       "content": [{
         "type": "text",
-        "text": f"No inbox at {inbox_dir}. Zero messages.",
+        "text": f"No inbox at {pending_dir}. Zero messages.",
       }],
       "structuredContent": {
         "messages": [], "total_count": 0, "returned_count": 0,
@@ -263,19 +266,22 @@ async def run_read(
       "isError": False,
     }
 
-  # Enumerate candidate files. Unread: to-<to>/from-*/*.md. Read (only
-  # if unread_only=False): to-<to>/done/*.md.
+  # Enumerate candidate files. Unread: pending/to-<to>/from-*/*.md.
+  # Read (only if unread_only=False): read/to-<to>/from-*/*.md.
+  # Both branches are now from-<sender>-scoped, so sender attribution
+  # survives being marked read — it did not under the old flat done/.
   candidates: list[Path] = []
-  for from_dir in sorted(inbox_dir.glob("from-*")):
+  for from_dir in sorted(pending_dir.glob("from-*")):
     if not from_dir.is_dir():
       continue
     for f in sorted(from_dir.glob("*.md")):
       if f.is_file():
         candidates.append(f)
   if not unread_only:
-    done_dir = inbox_dir / "done"
-    if done_dir.is_dir():
-      for f in sorted(done_dir.glob("*.md")):
+    for from_dir in sorted(read_dir.glob("from-*")):
+      if not from_dir.is_dir():
+        continue
+      for f in sorted(from_dir.glob("*.md")):
         if f.is_file():
           candidates.append(f)
 
@@ -314,14 +320,16 @@ async def run_read(
       body = body.encode("utf-8")[:max_body_bytes].decode("utf-8", errors="ignore")
       body += f"\n\n[TRUNCATED: original was {size_bytes} bytes]"
       truncated = True
-    # Extract `from` from parent directory (from-<X>).
+    # Extract `from` from parent directory (from-<X>). Post-restructure
+    # this works in BOTH branches — read/ is from-scoped too, so being
+    # marked read no longer erases the sender. The one exception is
+    # `from-legacy/`, the synthetic bucket the one-time migration used
+    # for files that were in the old flat `done/` (and the two that sat
+    # at a recipient root); their sender was already unrecoverable
+    # before the migration ran.
     parent = path.parent.name
     if parent.startswith("from-"):
       from_norm = parent[len("from-"):]
-    elif parent == "done":
-      # Not encoded in path once moved to done/; caller can still see
-      # `from` via frontmatter if the writer included it.
-      from_norm = "(read/moved)"
     else:
       from_norm = "(unknown)"
     slug = _parse_slug_from_filename(path.name) or ""
@@ -370,23 +378,21 @@ async def run_mark(
       path=path_raw,
     )
 
-  # If already under done/, treat as idempotent success.
-  parts = path.parts
-  # Expect: .../to-<X>/from-<Y>/<file>.md  OR  .../to-<X>/done/<file>.md
-  # Find "to-*" in ancestors to locate the inbox dir.
-  try:
-    to_idx = next(
-      i for i, part in enumerate(parts) if part.startswith("to-")
-    )
-  except StopIteration:
+  # Expect: <root>/pending/to-<X>/from-<Y>/<file>.md
+  # Marking read swaps the leading branch segment and keeps everything
+  # below it, so to-<X>/from-<Y>/ — and therefore the sender — survives.
+  rel_parts = path.relative_to(root).parts
+  if len(rel_parts) != 4:
     return _error_mark(
-      f"path {path_raw!r} is not inside a `to-<cowork>/` inbox directory.",
+      f"path {path_raw!r} is not of the form "
+      f"<messages>/pending/to-<cowork>/from-<cowork>/<file>.md. "
+      f"Cannot mark read.",
       path=path_raw,
     )
-  inbox_dir = Path(*parts[: to_idx + 1])
+  branch, to_part, from_part, _fname = rel_parts
 
-  # If parent is `done/`, no-op success.
-  if path.parent.name == "done":
+  # Already in read/ → idempotent success.
+  if branch == "read":
     return {
       "content": [{
         "type": "text",
@@ -395,24 +401,30 @@ async def run_mark(
       "structuredContent": {"path": str(path), "marked_read": True},
       "isError": False,
     }
-
-  # Sanity: parent must be `from-*/` for a valid unread message.
-  if not path.parent.name.startswith("from-"):
+  if branch != "pending":
     return _error_mark(
-      f"path {path_raw!r} is not in a `from-<cowork>/` subdirectory of an "
-      f"inbox. Cannot mark read.",
+      f"path {path_raw!r} is not under `pending/` or `read/`. "
+      f"Cannot mark read.",
       path=path_raw,
     )
+  if not to_part.startswith("to-") or not from_part.startswith("from-"):
+    return _error_mark(
+      f"path {path_raw!r} is not in a `to-<cowork>/from-<cowork>/` "
+      f"subdirectory of pending/. Cannot mark read.",
+      path=path_raw,
+    )
+
+  read_dir = root / "read" / to_part / from_part
   if not path.is_file():
     # Already moved by someone else — idempotent.
-    done_target = inbox_dir / "done" / path.name
-    if done_target.is_file():
+    read_target = read_dir / path.name
+    if read_target.is_file():
       return {
         "content": [{
           "type": "text",
-          "text": f"Already marked read at {done_target} (source no longer exists).",
+          "text": f"Already marked read at {read_target} (source no longer exists).",
         }],
-        "structuredContent": {"path": str(done_target), "marked_read": True},
+        "structuredContent": {"path": str(read_target), "marked_read": True},
         "isError": False,
       }
     return _error_mark(
@@ -420,21 +432,28 @@ async def run_mark(
       path=path_raw,
     )
 
-  done_dir = inbox_dir / "done"
-  done_dir.mkdir(parents=True, exist_ok=True)
-  target = done_dir / path.name
+  read_dir.mkdir(parents=True, exist_ok=True)
+  target = read_dir / path.name
   # Collision-suffix on rare same-file-moved-twice-with-changes.
   suffix = 2
   final_target = target
   while final_target.exists():
-    final_target = done_dir / f"{path.stem}-{suffix}{path.suffix}"
+    final_target = read_dir / f"{path.stem}-{suffix}{path.suffix}"
     suffix += 1
     if suffix > 100:
       return _error_mark(
-        f"Refusing to create >100 collision-suffixed done/ entries for {path.name}.",
+        f"Refusing to create >100 collision-suffixed read/ entries for {path.name}.",
         path=path_raw,
       )
   path.rename(final_target)
+  # Prune the now-empty pending dirs so the monitoring website's
+  # `pending/**` watch doesn't show hollow directories for inboxes
+  # that are fully read.
+  for stale in (path.parent, path.parent.parent):
+    try:
+      stale.rmdir()
+    except OSError:
+      break
   return {
     "content": [{
       "type": "text",

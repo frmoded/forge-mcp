@@ -30,7 +30,7 @@ async def test_writes_message_from_wizard_to_forge_core(_messages_root: Path):
   structured = result["structuredContent"]
   path = Path(structured["path"])
   assert path.is_file()
-  assert path.parent == _messages_root / "to-forge-core" / "from-wizard"
+  assert path.parent == _messages_root / "pending" / "to-forge-core" / "from-wizard"
   assert path.read_text() == "test message"
   assert structured["to"] == "forge-core"
   assert structured["from"] == "wizard"
@@ -219,13 +219,13 @@ async def test_refuses_slug_with_hidden_prefix(_messages_root: Path):
 async def test_creates_parent_directories(_messages_root: Path):
   """`from=` for a new source (never messaged before) auto-creates dirs."""
   # Precondition: dir doesn't exist.
-  assert not (_messages_root / "to-forge-reviewer" / "from-wizard").exists()
+  assert not (_messages_root / "pending" / "to-forge-reviewer" / "from-wizard").exists()
   result = await write_message.run(
     arguments={"to": "forge-reviewer", "body": "hi"},
     bearer="tok",
   )
   assert result["isError"] is False, result
-  assert (_messages_root / "to-forge-reviewer" / "from-wizard").is_dir()
+  assert (_messages_root / "pending" / "to-forge-reviewer" / "from-wizard").is_dir()
 
 
 @pytest.mark.asyncio
