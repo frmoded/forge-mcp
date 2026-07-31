@@ -238,3 +238,48 @@ async def test_custom_source_normalizes(_messages_root: Path):
   assert result["isError"] is False, result
   path = Path(result["structuredContent"]["path"])
   assert path.parent.name == "from-ccqa"
+
+
+# ---------------------------------------------------------------
+# drain 2026-07-30-1650 — forge-tester lane retired.
+#
+# The role was superseded by CCQA (Claude Code QA). These pin BOTH
+# directions: forge-tester must be rejected, ccqa must keep working.
+# The pairing matters — drain 1010's FEEDBACK wrongly flagged ccqa as
+# also retiring, and a whitelist edit that removed both would have
+# silently cut the active QA lane's write channel.
+
+@pytest.mark.asyncio
+async def test_drain_1650_forge_tester_target_rejected(_messages_root: Path):
+  result = await write_message.run(
+    arguments={"to": "forge-tester", "body": "hi"}, bearer="tok",
+  )
+  assert result["isError"] is True
+  text = result["content"][0]["text"]
+  assert "not in the allowed target set" in text
+  assert "forge-tester" not in text.split("Allowed:")[1]
+
+
+@pytest.mark.asyncio
+async def test_drain_1650_forge_tester_source_rejected(_messages_root: Path):
+  result = await write_message.run(
+    arguments={"to": "forge-core", "body": "hi", "from": "forge-tester"},
+    bearer="tok",
+  )
+  assert result["isError"] is True
+  assert "not in the allowed source set" in result["content"][0]["text"]
+
+
+@pytest.mark.asyncio
+async def test_drain_1650_ccqa_survives_as_target_and_source(_messages_root: Path):
+  """CCQA is the ACTIVE QA lane — retiring forge-tester must not touch it."""
+  result = await write_message.run(
+    arguments={"to": "forge-core", "body": "hi", "from": "ccqa"}, bearer="tok",
+  )
+  assert result["isError"] is False, result
+  assert "/pending/to-forge-core/from-ccqa/" in result["structuredContent"]["path"]
+  result2 = await write_message.run(
+    arguments={"to": "ccqa", "body": "hi", "from": "forge-core"}, bearer="tok",
+  )
+  assert result2["isError"] is False, result2
+  assert "/pending/to-ccqa/from-forge-core/" in result2["structuredContent"]["path"]

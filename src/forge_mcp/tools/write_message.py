@@ -39,11 +39,11 @@ _DEFAULT_MESSAGES_ROOT = "~/projects/forge-moda-bootstrap/messages"
 # Whitelists — extend by adding to these sets. Kept lowercase per repo
 # convention (directory names are all lowercase with dashes).
 _ALLOWED_TARGETS = {
-  "forge-core", "forge-reviewer", "ccqa", "forge-tester",
+  "forge-core", "forge-reviewer", "ccqa",
   "ccdocs", "forge-doc", "forge-moda", "forge-music",
 }
 _ALLOWED_SOURCES = {
-  "wizard", "forge-core", "forge-reviewer", "ccqa", "forge-tester",
+  "wizard", "forge-core", "forge-reviewer", "ccqa",
   "ccdocs", "forge-doc",
 }
 

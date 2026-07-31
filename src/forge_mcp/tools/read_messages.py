@@ -42,7 +42,7 @@ _DEFAULT_TRUNCATE_KB = 500
 
 # Match write_message's whitelist so read/write are symmetric.
 _ALLOWED_TARGETS = {
-  "forge-core", "forge-reviewer", "ccqa", "forge-tester",
+  "forge-core", "forge-reviewer", "ccqa",
   "ccdocs", "forge-doc", "forge-moda", "forge-music",
   "wizard",  # wizard's own inbox — reviewers reply here
 }
