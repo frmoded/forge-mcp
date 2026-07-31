@@ -55,6 +55,7 @@ from .tools import (
   register_vault,
   rename_note,
   render_music,
+  render_viz,
   run_recipe,
   save_image_from_url,
   unregister_vault,
@@ -605,6 +606,47 @@ def _make_server(
     if max_size_mb is not None:
       args["max_size_mb"] = max_size_mb
     result = await render_music.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  # ---------------------------------------------------------------------------
+  # Pedagogical diagram rendering (CW-forge-render-viz-mcp-tool,
+  # drain 2026-07-31-1050) — sibling to render_music. That one renders
+  # pitches to staff notation via music21/LilyPond; this renders
+  # parameters to a physics/notation SVG via pure-Python generators, so
+  # it has no binary dependency and stays up when the music toolchain
+  # is broken.
+  # ---------------------------------------------------------------------------
+
+  @server.tool(
+    name=render_viz.TOOL_NAME,
+    description=render_viz.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_render_viz(
+    ctx: Context,
+    kind: str,
+    target_path: str,
+    params: dict[str, Any] | None = None,
+    vault: str | None = None,
+    overwrite: bool | None = None,
+    max_size_mb: float | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"kind": kind, "target_path": target_path}
+    if params is not None:
+      args["params"] = params
+    if vault is not None:
+      args["vault"] = vault
+    if overwrite is not None:
+      args["overwrite"] = overwrite
+    if max_size_mb is not None:
+      args["max_size_mb"] = max_size_mb
+    result = await render_viz.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)
