@@ -228,3 +228,35 @@ async def test_empty_inbox_returns_zero(_messages_root: Path):
   assert result["structuredContent"]["total_count"] == 0
   assert result["structuredContent"]["returned_count"] == 0
   assert result["structuredContent"]["messages"] == []
+
+
+# ---------------------------------------------------------------
+# drain 2026-07-31-1110 — from-legacy/ displays as "(unknown)".
+
+@pytest.mark.asyncio
+async def test_drain_1110_from_legacy_reports_unknown(_messages_root: Path):
+  """`legacy` is the migration's directory convention; the semantic
+  truth is the sender was lost. Report the truth, not the plumbing."""
+  d = _messages_root / "read" / "to-wizard" / "from-legacy"
+  d.mkdir(parents=True)
+  (d / "2026-07-01-0900-old.md").write_text("body", encoding="utf-8")
+  result = await read_messages.run_read(
+    arguments={"to": "wizard", "unread_only": False}, bearer="tok",
+  )
+  assert result["isError"] is False, result
+  msgs = result["structuredContent"]["messages"]
+  assert len(msgs) == 1, msgs
+  assert msgs[0]["from"] == "(unknown)", msgs[0]
+  assert "legacy" not in msgs[0]["from"]
+
+
+@pytest.mark.asyncio
+async def test_drain_1110_real_senders_still_report_their_name(_messages_root: Path):
+  """The legacy special-case must not swallow genuine attribution."""
+  _write_msg(_messages_root, "wizard", "forge-reviewer",
+             "2026-07-29-0900-real.md", "body")
+  result = await read_messages.run_read(
+    arguments={"to": "wizard"}, bearer="tok",
+  )
+  msgs = result["structuredContent"]["messages"]
+  assert msgs[0]["from"] == "forge-reviewer", msgs[0]

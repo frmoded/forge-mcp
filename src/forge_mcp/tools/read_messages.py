@@ -327,8 +327,17 @@ async def run_read(
     # for files that were in the old flat `done/` (and the two that sat
     # at a recipient root); their sender was already unrecoverable
     # before the migration ran.
+    # drain 2026-07-31-1110: `from-legacy/` reports as "(unknown)", not
+    # "legacy". `legacy` names the migration's directory convention; the
+    # semantic truth is that the sender identity was destroyed by the old
+    # flat `done/` before this tree existed. Reusing the existing
+    # parenthesized sentinel rather than a bare "unknown" keeps it
+    # unambiguously not-a-cowork-name — a bare one would be
+    # indistinguishable from a peer actually called `unknown`.
     parent = path.parent.name
-    if parent.startswith("from-"):
+    if parent == "from-legacy":
+      from_norm = "(unknown)"
+    elif parent.startswith("from-"):
       from_norm = parent[len("from-"):]
     else:
       from_norm = "(unknown)"
