@@ -67,6 +67,7 @@ DESCRIPTION = (
   "(use forge_commit_recipe for action notes). Writes body verbatim "
   "with no auto-frontmatter injection. Pair with forge_create_markdown_note "
   "for the create side."
+  "Auto-commits the written file when the vault is git-tracked and returns git_sha (null if untracked or the commit failed — the file is written either way)."
 )
 
 
@@ -164,6 +165,9 @@ async def run(
     note_id=normalized_note_id,
     path=rel_path,
     absolute_path=str(absolute),
+    git_sha=vault_fs.auto_commit(
+      absolute, f"forge_edit_markdown_note: {normalized_note_id}",
+    ),
   )
   return {
     "content": [
@@ -172,6 +176,8 @@ async def run(
         "text": (
           f"Edited vanilla markdown note {normalized_note_id!r} in "
           f"vault {vault_name!r}."
+          + (f" Committed {result.git_sha[:8]}." if result.git_sha
+             else " Not committed (vault not git-tracked).")
         ),
       }
     ],

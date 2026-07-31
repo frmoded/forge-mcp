@@ -71,6 +71,7 @@ DESCRIPTION = (
   "aren't Forge-callable. Refuses to overwrite; use forge_edit_markdown_note "
   "for that. For Forge action notes (Description + Recipe pipeline), use "
   "forge_create_note + forge_commit_recipe instead."
+  "Auto-commits the written file when the vault is git-tracked and returns git_sha (null if untracked or the commit failed — the file is written either way)."
 )
 
 
@@ -135,17 +136,28 @@ async def run(
 
   rel_path = str(absolute.relative_to(vault_fs.root))
   normalized_note_id = note_id[:-3] if note_id.endswith(".md") else note_id
+  # drain 2026-07-31-1130 — auto-commit so wizard can ship a scaffold
+  # without a second tool. Never fails the write.
+  git_sha = vault_fs.auto_commit(
+    absolute, f"forge_create_markdown_note: {normalized_note_id}",
+  )
   result = CreateMarkdownNoteResult(
     vault=vault_name,
     note_id=normalized_note_id,
     path=rel_path,
     absolute_path=str(absolute),
+    git_sha=git_sha,
   )
   return {
     "content": [
       {
         "type": "text",
-        "text": f"Created vanilla markdown note {normalized_note_id!r} in vault {vault_name!r}.",
+        "text": (
+          f"Created vanilla markdown note {normalized_note_id!r} in "
+          f"vault {vault_name!r}."
+          + (f" Committed {git_sha[:8]}." if git_sha
+             else " Not committed (vault not git-tracked).")
+        ),
       }
     ],
     "structuredContent": result.model_dump(mode="json"),

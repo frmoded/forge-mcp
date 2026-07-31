@@ -1139,6 +1139,27 @@ class VaultFS:
         return parsed.recipe_body.rstrip("\n") if parsed.has_recipe_facet else None
     return None
 
+  def auto_commit(self, abs_path: Path, message: str) -> str | None:
+    """Best-effort `git add` + `commit` of one file in this vault.
+
+    drain 2026-07-31-1130. Returns the commit SHA, or None when the
+    vault isn't git-tracked OR the commit failed.
+
+    Never raises. A write that already succeeded must not be reported
+    as a failure because the commit half didn't land — the file IS on
+    disk either way. Callers surface `git_sha: None` so the difference
+    stays visible to the caller instead of being swallowed.
+
+    Wraps the module-private helpers so tools don't reach past the
+    VaultFS boundary to reuse them.
+    """
+    if not _is_git_tracked(self.root):
+      return None
+    try:
+      return _git_commit_file(self.root, abs_path, message)
+    except Exception:  # noqa: BLE001 — commits are never load-bearing
+      return None
+
 
 # ---------------------------------------------------------------------------
 # Filesystem + git helpers

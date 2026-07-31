@@ -112,6 +112,7 @@ DESCRIPTION = (
   "absolute path, size, SHA-256 hash, content-type, and echoes the "
   "source URL for provenance. HTTPS-only by default; pass insecure=True "
   "to accept plain http:// (dev/localhost)."
+  "Auto-commits the written file when the vault is git-tracked and returns git_sha (null if untracked or the commit failed — the file is written either way)."
 )
 
 
@@ -305,12 +306,22 @@ async def run(
     "content_type": content_type,
     "url": url,
   }
+  # drain 2026-07-31-1130 — auto-commit downloaded assets.
+  git_sha = vault_fs.auto_commit(
+    abs_path, f"forge_save_image_from_url: {rel_path_str}",
+  )
+  structured["git_sha"] = git_sha
+  commit_note = (
+    f" Committed {git_sha[:8]}." if git_sha
+    else " Not committed (vault not git-tracked)."
+  )
   return {
     "content": [{
       "type": "text",
       "text": (
         f"Saved {size_bytes} bytes to {rel_path_str!r} in vault "
         f"{vault_name!r} (sha256={sha256[:12]}, content-type={content_type})."
+        f"{commit_note}"
       ),
     }],
     "structuredContent": structured,

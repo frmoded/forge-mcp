@@ -393,6 +393,14 @@ class CreateMarkdownNoteResult(BaseModel):
   note_id: str = Field(..., description="Vault-relative note identifier (stem path).")
   path: str = Field(..., description="Vault-relative path of the created .md file.")
   absolute_path: str = Field(..., description="Absolute filesystem path.")
+  git_sha: str | None = Field(
+    default=None,
+    description=(
+      "drain 2026-07-31-1130. Commit SHA when the vault is git-tracked "
+      "and the commit succeeded; None otherwise. The note is written "
+      "either way — None means uncommitted, never unwritten."
+    ),
+  )
 
 
 class EditMarkdownNoteResult(BaseModel):
@@ -410,6 +418,14 @@ class EditMarkdownNoteResult(BaseModel):
   note_id: str = Field(..., description="Vault-relative note identifier (stem path).")
   path: str = Field(..., description="Vault-relative path of the edited .md file.")
   absolute_path: str = Field(..., description="Absolute filesystem path.")
+  git_sha: str | None = Field(
+    default=None,
+    description=(
+      "drain 2026-07-31-1130. Commit SHA when the vault is git-tracked "
+      "and the commit succeeded; None otherwise. The note is written "
+      "either way — None means uncommitted, never unwritten."
+    ),
+  )
 
 
 class NoteContent(BaseModel):

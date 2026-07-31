@@ -106,6 +106,13 @@ OUTPUT_SCHEMA: dict[str, Any] = {
   "type": "object",
   "required": ["vault", "path", "absolute_path", "size_bytes", "kind", "sha256"],
   "properties": {
+    "git_sha": {
+      "type": ["string", "null"],
+      "description": (
+        "Commit SHA if the vault is git-tracked and the commit "
+        "succeeded; null otherwise (the file is written either way)."
+      ),
+    },
     "vault": {"type": "string"},
     "path": {"type": "string"},
     "absolute_path": {"type": "string"},
@@ -121,7 +128,9 @@ DESCRIPTION = (
   "forge_render_music: that one renders pitches to staff notation, this "
   "renders parameters to a physics/notation figure. Embed the result in "
   "a note with ![[<target_path>]]. Refuses to overwrite unless "
-  "overwrite=true."
+  "overwrite=true. Auto-commits the written file when the vault is "
+  "git-tracked and returns git_sha (null if untracked or the commit "
+  "failed — the file is written either way)."
 )
 
 
@@ -135,6 +144,7 @@ def _error(text: str, *, vault: str = "", kind: str = "") -> dict[str, Any]:
       "size_bytes": 0,
       "kind": kind,
       "sha256": "",
+      "git_sha": None,
     },
     "isError": True,
   }
@@ -324,12 +334,19 @@ async def run(
   tmp.replace(abs_path)
 
   rel_path_str = str(abs_path.relative_to(vault_fs.root))
+  git_sha = vault_fs.auto_commit(
+    abs_path, f"forge_render_viz: {kind} -> {rel_path_str}",
+  )
+  commit_note = (
+    f" Committed {git_sha[:8]}." if git_sha
+    else " Not committed (vault not git-tracked)."
+  )
   return {
     "content": [{
       "type": "text",
       "text": (
         f"Rendered {kind} to {rel_path_str} in vault {vault_name!r} "
-        f"({len(data)} bytes). Embed with ![[{rel_path_str}]]."
+        f"({len(data)} bytes). Embed with ![[{rel_path_str}]].{commit_note}"
       ),
     }],
     "structuredContent": {
@@ -339,6 +356,7 @@ async def run(
       "size_bytes": len(data),
       "kind": kind,
       "sha256": sha256,
+      "git_sha": git_sha,
     },
     "isError": False,
   }

@@ -142,6 +142,7 @@ DESCRIPTION = (
   "wikilinks. Cohort clicks a MIDI embed to audition through their "
   "system player; SVG renders inline; MP3 renders inline as a "
   "<audio> player Obsidian shows in preview."
+  "Auto-commits the written file when the vault is git-tracked and returns git_sha (null if untracked or the commit failed — the file is written either way)."
 )
 
 
@@ -385,13 +386,23 @@ async def run(
     "format": fmt,
     "pitch_count": len(pitches),
   }
+  # drain 2026-07-31-1130 — auto-commit so wizard can fulfil "commit +
+  # push the re-rendered asset" without a second tool.
+  git_sha = vault_fs.auto_commit(
+    abs_path, f"forge_render_music: {fmt} -> {rel_path_str}",
+  )
+  structured["git_sha"] = git_sha
+  commit_note = (
+    f" Committed {git_sha[:8]}." if git_sha
+    else " Not committed (vault not git-tracked)."
+  )
   return {
     "content": [{
       "type": "text",
       "text": (
         f"Rendered {len(pitches)} pitches to {rel_path_str!r} "
         f"({len(data)} bytes, format={fmt}, sha256={local_sha[:12]}) in "
-        f"vault {vault_name!r}."
+        f"vault {vault_name!r}.{commit_note}"
       ),
     }],
     "structuredContent": structured,
