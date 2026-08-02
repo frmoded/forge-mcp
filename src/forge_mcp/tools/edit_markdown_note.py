@@ -16,6 +16,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..description_facet import DescriptionFacetError, rewrite_description_facet
 from ..schemas import EditMarkdownNoteResult
 from ..vault_fs import NoteIdInvalid, NoteNotFound, VaultFSError, _classify_note_type
 from ..vault_registry import VaultNotFoundError, VaultRegistry
@@ -47,6 +48,18 @@ INPUT_SCHEMA: dict[str, Any] = {
         "the first-registered vault."
       ),
     },
+    "facet": {
+      "type": "string",
+      "enum": ["body", "description"],
+      "default": "body",
+      "description": (
+        "Which region `body` replaces. 'body' (default) — replace the "
+        "entire note body; vanilla notes only. 'description' — replace "
+        "only the `# Description` block, preserving Recipe + Python + "
+        "frontmatter; action notes only. Mismatched combinations are "
+        "refused with guidance."
+      ),
+    },
   },
 }
 
@@ -62,10 +75,14 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 }
 
 DESCRIPTION = (
-  "Full-body replace on an existing vanilla markdown note. Fails if "
-  "the note doesn't exist, or if it's a Forge action or data note "
-  "(use forge_commit_recipe for action notes). Writes body verbatim "
-  "with no auto-frontmatter injection. Pair with forge_create_markdown_note "
+  "Edits an existing note. Default (facet='body'): full-body replace on "
+  "a vanilla markdown note, written verbatim with no auto-frontmatter "
+  "injection. With facet='description': replaces only the `# Description` "
+  "block of a Forge action note (`type: action`), preserving Recipe, "
+  "Python and frontmatter — use it to fix stale wikilinks or polish "
+  "Description prose; use forge_commit_recipe for Recipe changes. Fails "
+  "if the note doesn't exist, on data notes, and on mismatched "
+  "note-type/facet combinations. Pair with forge_create_markdown_note "
   "for the create side."
   "Auto-commits the written file when the vault is git-tracked and returns git_sha (null if untracked or the commit failed — the file is written either way)."
 )
@@ -92,6 +109,15 @@ async def run(
   note_id = arguments.get("note_id")
   body = arguments.get("body")
   vault_name = arguments.get("vault")
+  facet = arguments.get("facet", "body")
+
+  if facet not in ("body", "description"):
+    return _error(
+      f"Invalid 'facet': {facet!r}. Expected 'body' (default, vanilla "
+      "notes) or 'description' (action notes).",
+      vault=str(vault_name or ""),
+      note_id=str(note_id or ""),
+    )
 
   if not isinstance(note_id, str) or not note_id.strip():
     return _error(
@@ -131,12 +157,26 @@ async def run(
     return _error(f"Vault read failed: {exc}", vault=vault_name, note_id=note_id)
 
   note_type = _classify_note_type(content["frontmatter"])
-  if note_type == "action":
+  # Drain 2026-07-31-1350 — action notes are editable through the
+  # `description` facet only. `body` on an action note would flatten the
+  # Description/Recipe/Python structure, which is why the blanket
+  # refusal existed before this drain.
+  if note_type == "action" and facet == "body":
     return _error(
-      f"Refusing to edit {note_id!r}: it is a Forge action note "
-      "(`type: action`). Use forge_commit_recipe to update its "
-      "Recipe/Python facets so recipe_version and hashes stay "
-      "consistent.",
+      f"Refusing to replace the whole body of {note_id!r}: it is a Forge "
+      "action note (`type: action`), and a full-body write would destroy "
+      "its Description/Recipe/Python facet structure. Pass "
+      "facet='description' to rewrite just the Description, or use "
+      "forge_commit_recipe for the Recipe facet.",
+      vault=vault_name,
+      note_id=note_id,
+    )
+  if note_type != "action" and facet == "description":
+    return _error(
+      f"Refusing facet='description' on {note_id!r}: it is a "
+      f"{note_type} note with no `# Description` facet — only Forge "
+      "action notes (`type: action`) have one. Omit `facet` (or pass "
+      "facet='body') to replace the whole body.",
       vault=vault_name,
       note_id=note_id,
     )
@@ -149,6 +189,22 @@ async def run(
       vault=vault_name,
       note_id=note_id,
     )
+
+  if facet == "description":
+    # Splice into the note as it exists on disk; everything outside the
+    # `# Description` block — frontmatter, Recipe, Python — is carried
+    # through untouched. Notably NOT restamped: source_facet /
+    # sync_state / *_hash. See description_facet.py's module docstring.
+    try:
+      body = rewrite_description_facet(vault_fs.read_note(note_id), body)
+    except DescriptionFacetError as exc:
+      return _error(
+        f"Cannot rewrite the Description of {note_id!r}: {exc}",
+        vault=vault_name,
+        note_id=note_id,
+      )
+    except VaultFSError as exc:
+      return _error(f"Vault read failed: {exc}", vault=vault_name, note_id=note_id)
 
   try:
     absolute = vault_fs.write_markdown_note(note_id, body, allow_overwrite=True)
@@ -166,7 +222,8 @@ async def run(
     path=rel_path,
     absolute_path=str(absolute),
     git_sha=vault_fs.auto_commit(
-      absolute, f"forge_edit_markdown_note: {normalized_note_id}",
+      absolute,
+      f"forge_edit_markdown_note (facet={facet}): {normalized_note_id}",
     ),
   )
   return {
@@ -174,8 +231,16 @@ async def run(
       {
         "type": "text",
         "text": (
-          f"Edited vanilla markdown note {normalized_note_id!r} in "
-          f"vault {vault_name!r}."
+          (
+            f"Rewrote the Description facet of action note "
+            f"{normalized_note_id!r} in vault {vault_name!r}. Recipe "
+            "and Python are unchanged and now out of date with it — "
+            "the plugin restamps source_facet/sync_state when the note "
+            "is next opened in Obsidian."
+            if facet == "description"
+            else f"Edited vanilla markdown note {normalized_note_id!r} "
+                 f"in vault {vault_name!r}."
+          )
           + (f" Committed {result.git_sha[:8]}." if result.git_sha
              else " Not committed (vault not git-tracked).")
         ),
