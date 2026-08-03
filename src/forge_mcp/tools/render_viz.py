@@ -55,6 +55,7 @@ _HTTP_TIMEOUT_SECONDS = 30.0
 _ALLOWED_KINDS = (
   "sinewave",
   "sinewave_comparison",
+  "loudness_comparison",
   "wave_packet",
   "piano_keyboard",
   "harmonic_stack",
@@ -76,6 +77,9 @@ INPUT_SCHEMA: dict[str, Any] = {
         "stacked over one shared time window (freqs, duration_s, "
         "labels, amplitude) — cycle COUNT varies with freq, so this is "
         "the one for 'pitch = frequency' and 'octave = 2x'. "
+        "loudness_comparison = 2+ amplitudes at ONE frequency, each lane "
+        "annotated with its level in dB against the loudest (freqs held "
+        "fixed, height varies) — for 'loudness is logarithmic'. "
         "wave_packet = sinusoid under a Gaussian "
         "envelope (freq, cycles, envelope_center, envelope_width). "
         "piano_keyboard = keyboard segment (range, highlight, labels). "
