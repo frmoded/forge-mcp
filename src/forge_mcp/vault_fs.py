@@ -462,6 +462,24 @@ def splice_recipe(
 #     for agent-writable content).
 _NOTE_ID_SEGMENT = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\- ]*$")
 
+# Drain 2026-08-03-1105 — non-`.md` vault files that forge_delete_note
+# may remove when `is_asset=True`. Deliberately narrow: exactly the
+# media types the render/save tools write, so `is_asset` can never
+# become a delete-any-file primitive reaching `.py` / `.toml` / `.sh`.
+# `.svg`, `.mp3` and `.mid` are the extensions actually present in the
+# vault trees today; the rest are formats those same tools can emit or
+# that a driver would plausibly drop beside them.
+#
+# `.xml` is deliberately EXCLUDED even though MusicXML exists: nothing
+# in the write surface emits it (`forge_render_music` does midi / svg /
+# mp3 only), and `.xml` is a general-purpose format that could just as
+# easily be a config file. An allowlist that admits a format no tool
+# writes is pure downside.
+_ASSET_EXTENSIONS = frozenset({
+  ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif",
+  ".mp3", ".mid", ".midi", ".wav",
+})
+
 
 def _validate_dir_path(path: str) -> None:
   """Path-traversal defense for `mkdir` targets. Mirrors _validate_note_id
@@ -548,6 +566,46 @@ class VaultFS:
     except ValueError as exc:
       raise NoteIdInvalid(
         f"note_id {note_id!r} resolves outside vault root {self.root}"
+      ) from exc
+    return candidate
+
+  def asset_path(self, rel: str) -> Path:
+    """Map a vault-relative NON-`.md` asset path to an absolute path.
+
+    Drain 2026-08-03-1105. `note_path` appends `.md` when it's absent,
+    which makes it unusable for the SVG/MP3/MIDI assets written by
+    `forge_render_viz`, `forge_render_music` and
+    `forge_save_image_from_url`. This is the same resolver minus that
+    coercion, plus an extension allowlist.
+
+    Path safety is shared with `note_path` (`_validate_note_id` is
+    extension-independent: it rejects traversal, hidden segments and
+    unsupported characters), so assets get exactly the same traversal
+    and symlink-escape defense notes get.
+
+    The allowlist is the point: without it, `is_asset=True` would be a
+    delete-any-file-in-the-vault primitive, reaching `.py`, `.toml`,
+    `.sh`. Extensions outside it are refused even with `is_asset=True`.
+    """
+    _validate_note_id(rel)
+    suffix = Path(rel).suffix.lower()
+    if suffix == ".md":
+      raise NoteIdInvalid(
+        f"{rel!r} is a `.md` note, not an asset — delete it without "
+        "is_asset (or with is_asset=false)."
+      )
+    if suffix not in _ASSET_EXTENSIONS:
+      raise NoteIdInvalid(
+        f"{rel!r} has extension {suffix or '(none)'}, which is not a "
+        f"deletable vault asset. Allowed: "
+        f"{', '.join(sorted(_ASSET_EXTENSIONS))}."
+      )
+    candidate = (self.root / rel).resolve()
+    try:
+      candidate.relative_to(self.root)
+    except ValueError as exc:
+      raise NoteIdInvalid(
+        f"path {rel!r} resolves outside vault root {self.root}"
       ) from exc
     return candidate
 
@@ -924,7 +982,7 @@ class VaultFS:
     return new_path, None, None
 
   def delete_note(
-    self, note_id: str, message: str | None = None,
+    self, note_id: str, message: str | None = None, *, is_asset: bool = False,
   ) -> tuple[Path, str | None, str | None]:
     """Delete a note from this vault.
 
@@ -955,10 +1013,17 @@ class VaultFS:
 
     Raises NoteNotFound if the note doesn't exist.
     Raises NoteIdInvalid on traversal / shape violations.
+
+    Drain 2026-08-03-1105 — `is_asset=True` resolves via `asset_path`
+    (no `.md` coercion, extension allowlist) instead of `note_path`.
+    That swap is the ONLY difference: the dirty-tree reset, `git rm`,
+    path-scoped commit and unlink fallback below are all
+    extension-agnostic and apply unchanged to assets.
     """
-    path = self.note_path(note_id)
+    path = self.asset_path(note_id) if is_asset else self.note_path(note_id)
     if not path.is_file():
-      raise NoteNotFound(f"note {note_id!r} not found at {path}")
+      kind = "asset" if is_asset else "note"
+      raise NoteNotFound(f"{kind} {note_id!r} not found at {path}")
     if _is_git_tracked(self.root):
       rel = path.relative_to(self.root)
       # CW-forge-delete-note-handle-dirty-working-tree (drain 1800):

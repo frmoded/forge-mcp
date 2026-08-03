@@ -446,12 +446,17 @@ def _make_server(
     note_id: str,
     vault: str | None = None,
     message: str | None = None,
+    is_asset: bool = False,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
       return _to_call_tool_result(auth_error_to_tool_result(exc))
-    args: dict[str, Any] = {"note_id": note_id}
+    # Drain 2026-08-03-1105 — `is_asset` must be in THIS signature, not
+    # just delete_note.py's INPUT_SCHEMA; FastMCP builds the wire schema
+    # from here. tests/test_server_wrapper_schema_parity.py (drain 1110)
+    # now enforces that.
+    args: dict[str, Any] = {"note_id": note_id, "is_asset": is_asset}
     if vault is not None:
       args["vault"] = vault
     if message is not None:

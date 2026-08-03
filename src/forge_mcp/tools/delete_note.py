@@ -47,6 +47,18 @@ INPUT_SCHEMA: dict[str, Any] = {
         "untracked vaults."
       ),
     },
+    "is_asset": {
+      "type": "boolean",
+      "default": False,
+      "description": (
+        "False (default) deletes a `.md` note. True deletes a non-.md "
+        "vault asset written by forge_render_viz / forge_render_music / "
+        "forge_save_image_from_url — .svg .png .jpg .jpeg .webp .gif "
+        ".mp3 .mid .midi .wav .musicxml .xml. Extensions outside that "
+        "list are refused either way, so this can never delete source "
+        "files. Path-safety is identical for both."
+      ),
+    },
   },
 }
 
@@ -114,7 +126,12 @@ def _error(text: str, *, vault: str, note_id: str) -> dict[str, Any]:
   }
 
 
-def _normalize(note_id: str) -> str:
+def _normalize(note_id: str, *, is_asset: bool = False) -> str:
+  # Assets keep their extension — `pitch.svg` and `pitch.mp3` are
+  # different files, so stripping the suffix would make the reported
+  # id ambiguous. Only `.md` notes get the historical strip.
+  if is_asset:
+    return note_id
   return note_id[:-3] if note_id.endswith(".md") else note_id
 
 
@@ -126,6 +143,7 @@ async def run(
   note_id = arguments.get("note_id")
   vault_name = arguments.get("vault")
   message = arguments.get("message")
+  is_asset = bool(arguments.get("is_asset", False))
 
   if not isinstance(note_id, str) or not note_id.strip():
     return _error(
@@ -144,7 +162,9 @@ async def run(
 
   try:
     removed_absolute, git_sha, commit_msg = vault_fs.delete_note(
-      note_id, message=message if isinstance(message, str) else None,
+      note_id,
+      message=message if isinstance(message, str) else None,
+      is_asset=is_asset,
     )
   except NoteIdInvalid as exc:
     return _error(f"Invalid note_id: {exc}", vault=vault_name, note_id=note_id)
@@ -156,7 +176,7 @@ async def run(
   rel_path = str(removed_absolute.relative_to(vault_fs.root))
   result = DeleteNoteResult(
     vault=vault_name,
-    note_id=_normalize(note_id),
+    note_id=_normalize(note_id, is_asset=is_asset),
     path=rel_path,
     git_tracked=_is_git_tracked(vault_fs.root),
     git_sha=git_sha,
@@ -168,8 +188,9 @@ async def run(
       {
         "type": "text",
         "text": (
-          f"Deleted {_normalize(note_id)!r} from vault {vault_name!r}"
-          f"{sha_suffix}."
+          f"Deleted {'asset' if is_asset else 'note'} "
+          f"{_normalize(note_id, is_asset=is_asset)!r} from vault "
+          f"{vault_name!r}{sha_suffix}."
         ),
       }
     ],
