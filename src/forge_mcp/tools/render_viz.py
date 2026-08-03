@@ -48,8 +48,16 @@ TOOL_NAME = "forge_render_viz"
 _DEFAULT_MAX_SIZE_MB = 5.0
 _HTTP_TIMEOUT_SECONDS = 30.0
 
+# Mirrors viz.VIZ_KINDS in forge-transpile. This list is duplicated
+# rather than fetched because it feeds the advertised MCP enum, which
+# has to be known at server-construction time — but that means adding a
+# kind upstream requires editing here too (drain 2026-08-03-1100).
 _ALLOWED_KINDS = (
-  "sinewave", "wave_packet", "piano_keyboard", "harmonic_stack",
+  "sinewave",
+  "sinewave_comparison",
+  "wave_packet",
+  "piano_keyboard",
+  "harmonic_stack",
 )
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\- ]*$")
 
@@ -63,7 +71,12 @@ INPUT_SCHEMA: dict[str, Any] = {
       "enum": list(_ALLOWED_KINDS),
       "description": (
         "Diagram kind. sinewave = clean sinusoid (freq, cycles, "
-        "amplitude, phase). wave_packet = sinusoid under a Gaussian "
+        "amplitude, phase) — spans `cycles` wavelengths, so its shape "
+        "does NOT vary with freq. sinewave_comparison = 2+ sinusoids "
+        "stacked over one shared time window (freqs, duration_s, "
+        "labels, amplitude) — cycle COUNT varies with freq, so this is "
+        "the one for 'pitch = frequency' and 'octave = 2x'. "
+        "wave_packet = sinusoid under a Gaussian "
         "envelope (freq, cycles, envelope_center, envelope_width). "
         "piano_keyboard = keyboard segment (range, highlight, labels). "
         "harmonic_stack = stacked partials (fundamental, harmonics, "
