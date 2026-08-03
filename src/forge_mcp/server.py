@@ -24,7 +24,7 @@ import logging
 import os
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from mcp.server.fastmcp import Context, FastMCP  # type: ignore[import-untyped]
 from mcp.types import CallToolResult, TextContent
@@ -48,9 +48,9 @@ from .tools import (
   edit_markdown_note,
   get_run_result,
   list_vaults,
+  read_messages,
   read_note,
   read_note_catalog,
-  read_messages,
   read_notes_in_vault,
   register_vault,
   rename_note,
@@ -793,12 +793,23 @@ def _make_server(
     note_id: str,
     body: str,
     vault: str | None = None,
+    facet: Literal["body", "description"] = "body",
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
     except BearerExtractionError as exc:
       return _to_call_tool_result(auth_error_to_tool_result(exc))
-    args: dict[str, Any] = {"note_id": note_id, "body": body}
+    # Drain 2026-08-02-1815. `facet` MUST appear in this signature —
+    # FastMCP derives the advertised inputSchema from the wrapper's
+    # signature, not from the tool module's INPUT_SCHEMA dict. Drain
+    # 1350 added `facet` to edit_markdown_note.py's INPUT_SCHEMA and to
+    # run() but not here, so MCP clients stripped the argument before it
+    # left the client and every action-note edit was refused as if
+    # facet defaulted to "body". Same bug shape as drain 1405's
+    # resolve_slot (see the note above _forge_run_recipe's args build).
+    # Always forwarded, never conditional: run() validates the value and
+    # "body" is its own default anyway.
+    args: dict[str, Any] = {"note_id": note_id, "body": body, "facet": facet}
     if vault is not None:
       args["vault"] = vault
     result = await edit_markdown_note.run(
