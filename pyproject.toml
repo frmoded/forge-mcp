@@ -1,6 +1,6 @@
 [project]
 name = "forge-recipe-mcp"
-version = "0.2.26"
+version = "0.2.27"
 description = "MCP server for the Forge E-- library note catalog + Recipe authoring loop (compile / run / commit)."
 readme = "README.md"
 requires-python = ">=3.11"

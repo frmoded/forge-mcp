@@ -15,7 +15,11 @@ from ..forge_service_client import (
   ForgeServiceHTTPError,
 )
 from ..schemas import RunResult
-from ..vault_note_closure import CircularVaultNoteError, build_vault_note_closure
+from ..vault_note_closure import (
+  CircularVaultNoteError,
+  ClosureResolutionError,
+  build_vault_note_closure,
+)
 from ..vault_registry import VaultNotFoundError, VaultRegistry
 
 TOOL_NAME = "forge_run_recipe"
@@ -233,11 +237,36 @@ async def run(
         "structuredContent": {"parse_status": "parse_error", "run_id": ""},
         "isError": True,
       }
+    # Drain 2026-08-05-1900 (vault-split 3c) — thread the registry's
+    # import roots into the walker so [[import:note]] and bare links
+    # into imported vaults resolve. Resolution errors fail the call
+    # BEFORE hitting /run: an unresolvable wikilink means the closure
+    # is incomplete and the run would NameError anyway — better one
+    # actionable message per broken link now.
+    resolution_errors: list[ClosureResolutionError] = []
     try:
-      vault_notes = build_vault_note_closure(source, vault_fs)
+      vault_notes = build_vault_note_closure(
+        source,
+        vault_fs,
+        local_vault_name=vault_name,
+        imports=vault_registry.get_import_roots(vault_name),
+        errors=resolution_errors,
+      )
     except CircularVaultNoteError as exc:
       return {
         "content": [{"type": "text", "text": str(exc)}],
+        "structuredContent": {"parse_status": "parse_error", "run_id": ""},
+        "isError": True,
+      }
+    if resolution_errors:
+      report = "\n".join(e.message for e in resolution_errors)
+      return {
+        "content": [
+          {
+            "type": "text",
+            "text": f"Unresolvable wikilink(s) in the Recipe closure:\n{report}",
+          }
+        ],
         "structuredContent": {"parse_status": "parse_error", "run_id": ""},
         "isError": True,
       }

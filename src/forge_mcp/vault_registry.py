@@ -30,10 +30,17 @@ import os
 from pathlib import Path
 
 from .vault_fs import VaultFS, VaultFSError
+from .vault_imports import detect_cycle, parse_imports
 
 
 class VaultRegistryError(Exception):
   """Base for registry errors."""
+
+
+class VaultImportCycleError(VaultRegistryError):
+  """A vault's [imports] graph contains a cycle. Message carries the
+  full cycle path (per drain 1710's detect_cycle contract — the whole
+  loop is actionable; 'cycle detected' alone is not)."""
 
 
 class VaultNotFoundError(VaultRegistryError):
@@ -100,9 +107,75 @@ class VaultRegistry:
     if not vaults:
       raise VaultRegistryError("VaultRegistry requires at least one vault.")
     self._vaults = vaults
+    # Drain 2026-08-05-1900 (vault-split 3b) — import roots per
+    # top-level vault: vault name -> import name -> VaultFS. Import
+    # roots are NOT top-level vaults: they never appear in list() /
+    # names() / get(); they are reachable only via the vault that
+    # imports them (get_import_roots / get_import_root).
+    self._import_roots: dict[str, dict[str, VaultFS]] = {}
+    for name in self._vaults:
+      self._scan_imports(name)
+
+  def _scan_imports(self, name: str) -> None:
+    """Parse `[imports]` from the vault's forge.toml; register roots;
+    reject cycles.
+
+    Loud by design: a bad import declaration (unresolvable path, name
+    disagreement, git-only entry pre-Phase-2b, cycle) raises at
+    registration time rather than surfacing as a mysteriously
+    unresolvable wikilink later — same posture as parse_imports itself
+    and the startup DuplicateVaultNameError.
+    """
+    vault_fs = self._vaults[name]
+    manifest = vault_fs.root / "forge.toml"
+    if not manifest.exists():
+      self._import_roots[name] = {}
+      return
+    decls = parse_imports(manifest)
+    roots: dict[str, VaultFS] = {}
+    for import_name, decl in decls.items():
+      # parse_imports already validated: root is a directory, has a
+      # forge.toml, and its declared name matches the import key.
+      roots[import_name] = VaultFS(root=decl.root)
+    self._import_roots[name] = roots
+    if decls:
+      self._reject_import_cycles(name, vault_fs.root)
+
+  def _reject_import_cycles(self, name: str, root: Path) -> None:
+    """Build the TRANSITIVE import graph (nodes keyed by resolved
+    path — import names are local aliases and cannot carry identity
+    across vaults) and raise on any cycle reachable from `root`.
+
+    Transitive imports are parsed here for cycle detection ONLY; they
+    are not registered as walkable roots in this phase (the walker
+    resolves one level of imports — an imported vault's own imports
+    are Phase-3 follow-up scope)."""
+    edges: dict[str, list[str]] = {}
+    pending = [root.resolve()]
+    while pending:
+      node = pending.pop()
+      key = str(node)
+      if key in edges:
+        continue
+      manifest = node / "forge.toml"
+      if not manifest.exists():
+        edges[key] = []
+        continue
+      decls = parse_imports(manifest)
+      children = [decl.root.resolve() for decl in decls.values()]
+      edges[key] = [str(c) for c in children]
+      pending.extend(children)
+    cycle = detect_cycle(str(root.resolve()), edges)
+    if cycle:
+      pretty = " → ".join(Path(p).name for p in cycle)
+      raise VaultImportCycleError(
+        f"Vault {name!r} has an import cycle: {pretty}. Imports must "
+        f"form a DAG — break the loop in one of the forge.toml "
+        f"[imports] tables."
+      )
 
   @classmethod
-  def from_env(cls, env: dict[str, str] | None = None) -> "VaultRegistry":
+  def from_env(cls, env: dict[str, str] | None = None) -> VaultRegistry:
     """Construct from `FORGE_VAULTS` / `FORGE_VAULT_PATH` env vars.
 
     `env` param is a DI seam for tests (default: `os.environ`).
@@ -159,6 +232,37 @@ class VaultRegistry:
   def names(self) -> list[str]:
     return list(self._vaults.keys())
 
+  # -- Import roots (drain 2026-08-05-1900, vault-split 3b) ------------------
+
+  def get_import_roots(self, name: str | None = None) -> dict[str, VaultFS]:
+    """The import roots of one top-level vault: import name -> VaultFS.
+
+    Empty dict for a vault with no [imports] — the common case.
+    Declaration order is preserved (parse_imports iterates the TOML
+    table), which the link resolver's bare-name search relies on.
+    `None` resolves to the first-registered vault, mirroring `get`.
+    """
+    if name is None or name == "":
+      name = next(iter(self._vaults))
+    if name not in self._vaults:
+      available = ", ".join(sorted(self._vaults.keys()))
+      raise VaultNotFoundError(
+        f"Vault {name!r} is not registered. Available vaults: {available}."
+      )
+    return dict(self._import_roots.get(name, {}))
+
+  def get_import_root(self, name: str, import_name: str) -> VaultFS:
+    """Direct lookup of one import root. Raises VaultNotFoundError for
+    an unknown vault OR an undeclared import name."""
+    roots = self.get_import_roots(name)
+    if import_name not in roots:
+      declared = ", ".join(roots) or "none"
+      raise VaultNotFoundError(
+        f"Vault {name!r} declares no import {import_name!r}. "
+        f"Declared imports: {declared}."
+      )
+    return roots[import_name]
+
   # -- Runtime add / remove (CW-MCP-runtime-vault-registration) -------------
 
   def add(self, name: str, vault_fs: VaultFS) -> None:
@@ -172,6 +276,15 @@ class VaultRegistry:
         f"Vault {name!r} is already registered. Unregister first, then re-add."
       )
     self._vaults[name] = vault_fs
+    try:
+      self._scan_imports(name)
+    except Exception:
+      # A vault with a broken [imports] must not half-register — roll
+      # back so the registry's vault set and import-root set stay
+      # consistent, then let the error surface to the caller.
+      del self._vaults[name]
+      self._import_roots.pop(name, None)
+      raise
 
   def remove(self, name: str) -> None:
     """Unregister a vault at runtime.
@@ -195,3 +308,4 @@ class VaultRegistry:
         f"Register another vault first, then remove this one."
       )
     del self._vaults[name]
+    self._import_roots.pop(name, None)
