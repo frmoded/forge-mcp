@@ -201,3 +201,43 @@ def test_closure_diamond_ok(vault: VaultFS):
   names = [e["name"] for e in result]
   assert names.count("d") == 1
   assert set(names) == {"a", "b", "c", "d"}
+
+
+# --- Drain 2026-08-05-0710 — namespaced wikilinks -------------------------
+#
+# `[[import-name:note-id]]` names which vault a link means; `[[local:x]]`
+# names the containing one. The change is additive — the prefix group is
+# optional — so these tests pair "the new form parses" with "every old
+# form is byte-identical", since the second is what makes it safe.
+
+def test_drain_0710_namespaced_wikilink_parses():
+  assert extract_wikilinks("Return Call [[music-core:scale]].") == ["music-core:scale"]
+
+
+def test_drain_0710_local_prefix_parses():
+  assert extract_wikilinks("Return Call [[local:scale]].") == ["local:scale"]
+
+
+def test_drain_0710_bare_form_is_unchanged():
+  # The regression that matters. Every existing caller passes bare
+  # wikilinks; if any of these shifted, the closure walker breaks
+  # everywhere at once.
+  assert extract_wikilinks("[[scale]] [[music_theory/scale]] [[a-b_c]]") == [
+    "scale", "music_theory/scale", "a-b_c",
+  ]
+
+
+def test_drain_0710_namespace_is_preserved_not_stripped():
+  # Two imports can each hold a note called `scale`. Dropping the
+  # prefix here would collapse them — the exact ambiguity the syntax
+  # exists to resolve.
+  out = extract_wikilinks("[[a:scale]] and [[b:scale]]")
+  assert out == ["a:scale", "b:scale"]
+
+
+def test_drain_0710_namespaced_and_bare_are_distinct():
+  assert extract_wikilinks("[[scale]] then [[local:scale]]") == ["scale", "local:scale"]
+
+
+def test_drain_0710_dedupe_still_applies_per_qualified_name():
+  assert extract_wikilinks("[[a:x]] [[a:x]] [[x]]") == ["a:x", "x"]

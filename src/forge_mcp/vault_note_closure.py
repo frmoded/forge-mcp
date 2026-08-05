@@ -36,7 +36,18 @@ if TYPE_CHECKING:
 
 # Matches the parser's wikilink grammar exactly (parser.py:293-299):
 #   [[  <alpha|_>  (<alphanum|_|/|->)*  ]]
-_WIKILINK_RE = re.compile(r"\[\[([A-Za-z_][A-Za-z0-9_/-]*)\]\]")
+# Drain 2026-08-05-0710 — the optional `name:` prefix is the
+# namespaced form from forge/docs/specs/vault-imports.md:
+# `[[music-core:scale]]` names which vault a link means, and
+# `[[local:scale]]` names the containing one.
+#
+# ADDITIVE. The prefix group is optional, so every existing bare
+# `[[note-id]]` matches exactly as before and `extract_wikilinks`
+# returns the same strings for the same inputs. Nothing downstream has
+# to learn about namespaces until it wants to.
+_WIKILINK_RE = re.compile(
+  r"\[\[(?:([A-Za-z_][A-Za-z0-9_-]*):)?([A-Za-z_][A-Za-z0-9_/-]*)\]\]"
+)
 
 
 class CircularVaultNoteError(Exception):
@@ -60,7 +71,12 @@ def extract_wikilinks(source: str) -> list[str]:
   out: list[str] = []
   seen: set[str] = set()
   for match in _WIKILINK_RE.finditer(source):
-    name = match.group(1)
+    namespace, target = match.group(1), match.group(2)
+    # Round-trip the namespace into the returned string so the closure
+    # walker sees what the author wrote. Dropping it here would make
+    # `[[a:x]]` and `[[b:x]]` indistinguishable — which is the exact
+    # ambiguity the syntax exists to resolve.
+    name = f"{namespace}:{target}" if namespace else target
     if name not in seen:
       seen.add(name)
       out.append(name)
