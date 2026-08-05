@@ -388,10 +388,14 @@ async def run(
   }
   # drain 2026-07-31-1130 — auto-commit so wizard can fulfil "commit +
   # push the re-rendered asset" without a second tool.
-  git_sha = vault_fs.auto_commit(
+  _commit = vault_fs.auto_commit(
     abs_path, f"forge_render_music: {fmt} -> {rel_path_str}",
+    expected_content=abs_path.read_bytes(),
   )
+  git_sha = _commit.git_sha
   structured["git_sha"] = git_sha
+  structured["foreign_changes_detected"] = _commit.foreign_changes_detected
+  structured["foreign_changes_summary"] = _commit.foreign_changes_summary
   commit_note = (
     f" Committed {git_sha[:8]}." if git_sha
     else " Not committed (vault not git-tracked)."

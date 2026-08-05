@@ -138,15 +138,19 @@ async def run(
   normalized_note_id = note_id[:-3] if note_id.endswith(".md") else note_id
   # drain 2026-07-31-1130 — auto-commit so wizard can ship a scaffold
   # without a second tool. Never fails the write.
-  git_sha = vault_fs.auto_commit(
+  _commit = vault_fs.auto_commit(
     absolute, f"forge_create_markdown_note: {normalized_note_id}",
+    expected_content=absolute.read_text(encoding="utf-8"),
   )
+  git_sha = _commit.git_sha
   result = CreateMarkdownNoteResult(
     vault=vault_name,
     note_id=normalized_note_id,
     path=rel_path,
     absolute_path=str(absolute),
     git_sha=git_sha,
+    foreign_changes_detected=_commit.foreign_changes_detected,
+    foreign_changes_summary=_commit.foreign_changes_summary,
   )
   return {
     "content": [

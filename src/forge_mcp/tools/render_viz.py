@@ -351,9 +351,11 @@ async def run(
   tmp.replace(abs_path)
 
   rel_path_str = str(abs_path.relative_to(vault_fs.root))
-  git_sha = vault_fs.auto_commit(
+  _commit = vault_fs.auto_commit(
     abs_path, f"forge_render_viz: {kind} -> {rel_path_str}",
+    expected_content=abs_path.read_bytes(),
   )
+  git_sha = _commit.git_sha
   commit_note = (
     f" Committed {git_sha[:8]}." if git_sha
     else " Not committed (vault not git-tracked)."
@@ -374,6 +376,8 @@ async def run(
       "kind": kind,
       "sha256": sha256,
       "git_sha": git_sha,
+      "foreign_changes_detected": _commit.foreign_changes_detected,
+      "foreign_changes_summary": _commit.foreign_changes_summary,
     },
     "isError": False,
   }

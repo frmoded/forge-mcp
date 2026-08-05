@@ -99,6 +99,27 @@ class VersionConflict(VaultFSError):
 
 
 @dataclass
+class AutoCommitResult:
+  """Outcome of one `VaultFS.auto_commit` call.
+
+  drain 2026-08-03-1540. Replaces the bare `str | None` return so a
+  caller can distinguish "committed cleanly" from "committed, but the
+  commit also carries somebody else's change to the same file".
+
+  `foreign_changes_detected` is only ever True when the caller supplied
+  `expected_content`; without it there is nothing to compare against and
+  the field stays False. False therefore means "no foreign change seen",
+  NOT "no foreign change possible" — a caller that skips
+  `expected_content` gets no signal either way.
+  """
+
+  git_sha: str | None
+  committed: bool
+  foreign_changes_detected: bool = False
+  foreign_changes_summary: str | None = None
+
+
+@dataclass
 class ParsedNote:
   """The V2a note broken into slices sufficient to splice the Recipe
   body without touching anything else.
@@ -704,7 +725,14 @@ class VaultFS:
         )
       else:
         message = f"forge-mcp: commit recipe {note_id} {suffix}"
-      git_sha = _git_commit_file(self.root, path, message)
+      # drain 2026-08-03-1540 — `commit_recipe` keeps the bare-SHA
+      # contract its `CommitResult` model declares. Foreign-change
+      # detection is not wired here: this path rewrites the Recipe
+      # facet through a different helper chain, and §Not-in-scope holds
+      # it out. `_git_commit_file` still absorbs concurrent edits here
+      # exactly as it does elsewhere — that is a known gap, not a
+      # solved one.
+      git_sha = _git_commit_file(self.root, path, message).git_sha
 
     return new_version, git_sha
 
@@ -1204,26 +1232,36 @@ class VaultFS:
         return parsed.recipe_body.rstrip("\n") if parsed.has_recipe_facet else None
     return None
 
-  def auto_commit(self, abs_path: Path, message: str) -> str | None:
+  def auto_commit(
+    self,
+    abs_path: Path,
+    message: str,
+    expected_content: str | bytes | None = None,
+  ) -> AutoCommitResult:
     """Best-effort `git add` + `commit` of one file in this vault.
 
-    drain 2026-07-31-1130. Returns the commit SHA, or None when the
-    vault isn't git-tracked OR the commit failed.
+    drain 2026-07-31-1130. Returns an `AutoCommitResult`; `git_sha` is
+    None when the vault isn't git-tracked OR the commit failed.
 
     Never raises. A write that already succeeded must not be reported
     as a failure because the commit half didn't land — the file IS on
     disk either way. Callers surface `git_sha: None` so the difference
     stays visible to the caller instead of being swallowed.
 
+    Pass `expected_content` — the exact bytes the tool just wrote — to
+    enable foreign-change detection (drain 2026-08-03-1540). Omit it and
+    detection is skipped, which is correct for deletes and renames where
+    there is no post-write content to compare against.
+
     Wraps the module-private helpers so tools don't reach past the
     VaultFS boundary to reuse them.
     """
     if not _is_git_tracked(self.root):
-      return None
+      return AutoCommitResult(git_sha=None, committed=False)
     try:
-      return _git_commit_file(self.root, abs_path, message)
+      return _git_commit_file(self.root, abs_path, message, expected_content)
     except Exception:  # noqa: BLE001 — commits are never load-bearing
-      return None
+      return AutoCommitResult(git_sha=None, committed=False)
 
 
 # ---------------------------------------------------------------------------
@@ -1244,13 +1282,42 @@ def _is_git_tracked(root: Path) -> bool:
   return (root / ".git").exists()
 
 
-def _git_commit_file(root: Path, path: Path, message: str) -> str | None:
-  """`git add <path>` + `git commit -m <message>`. Returns the commit
-  SHA on success; None on any failure (no exception — commits are
-  best-effort per drain §6).
+def _git_staged_blob(root: Path, rel: Path) -> bytes | None:
+  """Bytes of `rel` as currently staged in the index.
+
+  `git show :<path>` reads the index entry, which is exactly what a
+  subsequent `git commit -- <path>` will record. Comparing against it —
+  rather than against the working tree — closes the window where a
+  foreign write lands between our read and the commit: whatever is in
+  the index IS the commit.
+  """
+  res = subprocess.run(
+    ["git", "-C", str(root), "show", f":{rel}"],
+    capture_output=True, check=False,
+  )
+  return res.stdout if res.returncode == 0 else None
+
+
+def _git_commit_file(
+  root: Path,
+  path: Path,
+  message: str,
+  expected_content: str | bytes | None = None,
+) -> AutoCommitResult:
+  """`git add <path>` + `git commit -m <message>`. Returns an
+  `AutoCommitResult`; `git_sha` is None on any failure (no exception —
+  commits are best-effort per drain §6).
 
   Explicit args (not `git commit -am`) so we don't sweep in unrelated
-  working-tree changes.
+  changes to OTHER files. Note that this does NOT protect against
+  foreign changes to THIS file: `git commit -- <path>` records that
+  path's staged state wholesale, so a concurrent write by another actor
+  (the Obsidian plugin restamping `sync_state`, a second pane, a human)
+  is absorbed into our commit under our message. That is the drain
+  2026-07-31-1740 mechanism, and it is why `expected_content` exists —
+  see drain 2026-08-03-1540. We cannot prevent the absorption without
+  refusing the commit or reconstructing a partial diff; we can, and do,
+  report it.
   """
   rel = path.relative_to(root)
   try:
@@ -1258,6 +1325,18 @@ def _git_commit_file(root: Path, path: Path, message: str) -> str | None:
       ["git", "-C", str(root), "add", "--", str(rel)],
       capture_output=True, text=True, check=True,
     )
+
+    # Detect BEFORE committing, while the index still holds the exact
+    # tree we are about to record.
+    foreign = False
+    staged = _git_staged_blob(root, rel) if expected_content is not None else None
+    if expected_content is not None and staged is not None:
+      want = (
+        expected_content.encode("utf-8")
+        if isinstance(expected_content, str) else expected_content
+      )
+      foreign = staged != want
+
     subprocess.run(
       ["git", "-C", str(root), "commit", "-m", message, "--", str(rel)],
       capture_output=True, text=True, check=True,
@@ -1266,9 +1345,26 @@ def _git_commit_file(root: Path, path: Path, message: str) -> str | None:
       ["git", "-C", str(root), "rev-parse", "HEAD"],
       capture_output=True, text=True, check=True,
     )
-    return sha_res.stdout.strip() or None
+    sha = sha_res.stdout.strip() or None
+
+    summary = None
+    if foreign and sha:
+      summary = (
+        f"Commit {sha[:8]} contains changes beyond this tool's edit — the "
+        f"staged content of {rel} differs from what the tool wrote. Most "
+        f"likely a concurrent restamp by the Obsidian plugin or another "
+        f"actor writing the same file. The tool's own change did land; it "
+        f"is simply not the only thing in this commit. "
+        f"Inspect: git show {sha} -- {rel}"
+      )
+    return AutoCommitResult(
+      git_sha=sha,
+      committed=sha is not None,
+      foreign_changes_detected=foreign,
+      foreign_changes_summary=summary,
+    )
   except subprocess.CalledProcessError:
-    return None
+    return AutoCommitResult(git_sha=None, committed=False)
 
 
 def _stem(rel: Path) -> str:

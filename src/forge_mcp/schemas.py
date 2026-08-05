@@ -403,6 +403,27 @@ class CreateMarkdownNoteResult(BaseModel):
   )
 
 
+  foreign_changes_detected: bool = Field(
+    default=False,
+    description=(
+      "drain 2026-08-03-1540. True when this commit carries changes to "
+      "the same file beyond the tool's own edit — `git commit -- <path>` "
+      "records that path wholesale, so a concurrent write (the Obsidian "
+      "plugin restamping sync_state, a second pane, a human) is absorbed "
+      "under this tool's commit message. The tool's edit still landed; it "
+      "is just not the only thing in the commit. False means no foreign "
+      "change was SEEN, not that none was possible."
+    ),
+  )
+  foreign_changes_summary: str | None = Field(
+    default=None,
+    description=(
+      "drain 2026-08-03-1540. Human-readable detail when "
+      "foreign_changes_detected is True, including the SHA and a "
+      "`git show` command to inspect it. None otherwise."
+    ),
+  )
+
 class EditMarkdownNoteResult(BaseModel):
   """Result envelope for forge_edit_markdown_note.
 
@@ -427,6 +448,27 @@ class EditMarkdownNoteResult(BaseModel):
     ),
   )
 
+
+  foreign_changes_detected: bool = Field(
+    default=False,
+    description=(
+      "drain 2026-08-03-1540. True when this commit carries changes to "
+      "the same file beyond the tool's own edit — `git commit -- <path>` "
+      "records that path wholesale, so a concurrent write (the Obsidian "
+      "plugin restamping sync_state, a second pane, a human) is absorbed "
+      "under this tool's commit message. The tool's edit still landed; it "
+      "is just not the only thing in the commit. False means no foreign "
+      "change was SEEN, not that none was possible."
+    ),
+  )
+  foreign_changes_summary: str | None = Field(
+    default=None,
+    description=(
+      "drain 2026-08-03-1540. Human-readable detail when "
+      "foreign_changes_detected is True, including the SHA and a "
+      "`git show` command to inspect it. None otherwise."
+    ),
+  )
 
 class NoteContent(BaseModel):
   """Full V2a content of a single vault note.

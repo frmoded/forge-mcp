@@ -216,15 +216,19 @@ async def run(
 
   rel_path = str(absolute.relative_to(vault_fs.root))
   normalized_note_id = note_id[:-3] if note_id.endswith(".md") else note_id
+  _commit = vault_fs.auto_commit(
+    absolute,
+    f"forge_edit_markdown_note (facet={facet}): {normalized_note_id}",
+    expected_content=absolute.read_text(encoding="utf-8"),
+  )
   result = EditMarkdownNoteResult(
     vault=vault_name,
     note_id=normalized_note_id,
     path=rel_path,
     absolute_path=str(absolute),
-    git_sha=vault_fs.auto_commit(
-      absolute,
-      f"forge_edit_markdown_note (facet={facet}): {normalized_note_id}",
-    ),
+    git_sha=_commit.git_sha,
+    foreign_changes_detected=_commit.foreign_changes_detected,
+    foreign_changes_summary=_commit.foreign_changes_summary,
   )
   return {
     "content": [
