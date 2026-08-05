@@ -1,4 +1,4 @@
-"""S9 hexa-state facet hashing, byte-compatible with the plugin.
+r"""S9 hexa-state facet hashing, byte-compatible with the plugin.
 
 Drain 2026-08-05-0720. The plugin has stamped these hashes reactively
 since drain 1700; this is the MCP-side twin so a note authored entirely
