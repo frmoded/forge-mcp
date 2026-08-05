@@ -37,6 +37,8 @@ from __future__ import annotations
 import re
 import subprocess
 from dataclasses import dataclass, field
+
+from .facet_hash import compute_facet_hash
 from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -887,10 +889,46 @@ class VaultFS:
     # (welcome-shape-classifier tests + modal.test.ts) and satisfies
     # `parse_note`'s frontmatter recognition (which requires a non-
     # empty block between the fences to find the closing `\n---`).
+    # Drain 2026-08-05-0720 — stamp the full S9 hexa-state here rather
+    # than leaving it to the plugin's reactive stampers.
+    #
+    # Pre-drain, an MCP-authored note carried `type` + `inputs` only;
+    # recipe_hash / python_hash / python_derived_from_recipe_hash were
+    # ABSENT (not null) until someone opened the note in Obsidian, and
+    # `sync_state` read `synced` on a note whose Python had never been
+    # generated. Constitution S9 promises the hexa-state is always
+    # visible; MCP is the authoring tool here, so MCP fills it in.
+    #
+    # Hashes computed over the body ACTUALLY WRITTEN below, not over
+    # hand-written strings — same discipline as the plugin-side twin in
+    # drain 1610. One byte of disagreement and the note renders
+    # hand-edited the moment it is created.
+    description_hash = compute_facet_hash(desc_body)
+    empty_hash = compute_facet_hash("")
     frontmatter_block = (
       "---\n"
       "type: action\n"
       "inputs: []\n"
+      # NOT `recipe_version: 0`. Drain 0720's target shape lists it, but
+      # CW-forge-mcp-drop-recipe-version-shell-marker (2026-07-29-2305)
+      # removed it deliberately — it is indistinguishable from a missing
+      # stamp to every reader, since `current_recipe_version` defaults
+      # missing to 0 — and two tests pin its absence. Re-adding it to
+      # satisfy a byte-for-byte parity goal would reverse a reasoned
+      # decision to make two files look alike. Nothing observable
+      # differs; see this drain's FEEDBACK.
+      "source_facet: description\n"
+      # Recipe is empty and therefore not derived from this
+      # Description. `stale-recipe` is the honest opening state.
+      "sync_state: stale-recipe\n"
+      f"description_hash: {description_hash}\n"
+      f"recipe_hash: {empty_hash}\n"
+      f"python_hash: {empty_hash}\n"
+      f"recipe_derived_from_description_hash: {description_hash}\n"
+      f"recipe_derived_from_source_hash: {description_hash}\n"
+      f"python_derived_from_recipe_hash: {empty_hash}\n"
+      f"python_derived_from_source_hash: {description_hash}\n"
+      f"english_hash: {empty_hash}\n"
       "---\n"
     )
     if desc_body:

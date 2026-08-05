@@ -148,17 +148,34 @@ async def test_create_note_shell_writes_v2a_frontmatter(
   )
   vault_fs = single_vault_registry.get()
   content = (vault_fs.root / "mytest" / "greeting.md").read_text()
-  expected_prefix = (
-    "---\n"
-    "type: action\n"
-    "inputs: []\n"
-    "---\n"
-    "\n"
-    "# Description\n"
-    "\n"
-    "Say hi\n"
-  )
-  assert content == expected_prefix
+  # Drain 2026-08-05-0720 — the shell now stamps the full S9 hexa-state
+  # at write time instead of leaving it to the plugin's reactive
+  # stampers. Asserted field-by-field rather than as one literal block:
+  # the hashes are content-dependent, and a frozen literal would have to
+  # be regenerated on every wording change to the fixture description.
+  from forge_mcp.facet_hash import compute_facet_hash
+
+  assert content.startswith("---\ntype: action\ninputs: []\n")
+  assert content.endswith("---\n\n# Description\n\nSay hi\n")
+
+  description_hash = compute_facet_hash("Say hi")
+  empty_hash = compute_facet_hash("")
+  for line in (
+    "source_facet: description",
+    "sync_state: stale-recipe",
+    f"description_hash: {description_hash}",
+    f"recipe_hash: {empty_hash}",
+    f"python_hash: {empty_hash}",
+    f"recipe_derived_from_description_hash: {description_hash}",
+    f"recipe_derived_from_source_hash: {description_hash}",
+    f"python_derived_from_recipe_hash: {empty_hash}",
+    f"python_derived_from_source_hash: {description_hash}",
+    f"english_hash: {empty_hash}",
+  ):
+    assert f"\n{line}\n" in content, f"missing frontmatter line: {line}"
+
+  # CW-2305 still holds — the hexa-state did not smuggle the stamp back.
+  assert "recipe_version" not in content
 
 
 @pytest.mark.asyncio
