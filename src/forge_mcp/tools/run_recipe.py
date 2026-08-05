@@ -131,10 +131,30 @@ def _preview_text(result: RunResult) -> str:
     bits.append("TIMED OUT")
   if result.artifacts:
     bits.append(f"{len(result.artifacts)} artifact(s)")
+  # Drain 2026-08-05-0820 — the short id is for scanning, not for
+  # copying. `Run 97de26b9… ` reads as "the run id is 97de26b9", and a
+  # reader who acts on that gets "not found: invalid id" from
+  # forge_get_run_result. The ellipsis is doing all the work of
+  # signalling truncation, and it is one character wide.
+  #
+  # The full id and the exact follow-up call therefore appear in the
+  # text whenever there IS a run to fetch — most pointedly on failure,
+  # which is when stderr is the thing the caller actually wants and the
+  # moment they are least inclined to go reading structuredContent.
   header = f"Run {result.run_id[:8]}… — {', '.join(bits)}"
+  parts = [header]
   if result.stdout_preview:
-    return f"{header}\n\n{result.stdout_preview[:1200]}"
-  return header
+    parts.append(result.stdout_preview[:1200])
+  failed = result.exit_code != 0 or result.timed_out
+  if result.run_id:
+    if failed:
+      parts.append(
+        f"This run failed. Full stderr and stdout:\n"
+        f"  forge_get_run_result(run_id=\"{result.run_id}\")"
+      )
+    else:
+      parts.append(f'Full output: forge_get_run_result(run_id="{result.run_id}")')
+  return "\n\n".join(parts)
 
 
 async def run(
