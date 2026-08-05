@@ -581,6 +581,28 @@ class RenameNoteResult(BaseModel):
   )
 
 
+  foreign_changes_detected: bool = Field(
+    default=False,
+    description=(
+      "drain 2026-08-05-0830. ALWAYS False for this tool. It commits "
+      "through `_git_commit_paths`, not `auto_commit`, and performs no "
+      "foreign-change detection — there is no post-write content to "
+      "compare against when a file has been deleted or moved. Present "
+      "for schema parity with the five tools that do detect (drain "
+      "2026-08-03-1540), so wizard's HARD RULE 3b reads the same field "
+      "on every git-touching tool instead of remembering which five "
+      "carry it. False here means NOT CHECKED, which is a weaker claim "
+      "than the False those five return."
+    ),
+  )
+  foreign_changes_summary: str | None = Field(
+    default=None,
+    description=(
+      "drain 2026-08-05-0830. Always None for this tool — see "
+      "foreign_changes_detected. Present for schema parity only."
+    ),
+  )
+
 class DeleteNoteResult(BaseModel):
   """Result envelope for forge_delete_note (CW-MCP-rename-delete-note)."""
 
@@ -609,6 +631,28 @@ class DeleteNoteResult(BaseModel):
     ),
   )
 
+
+  foreign_changes_detected: bool = Field(
+    default=False,
+    description=(
+      "drain 2026-08-05-0830. ALWAYS False for this tool. It commits "
+      "through `_git_commit_paths`, not `auto_commit`, and performs no "
+      "foreign-change detection — there is no post-write content to "
+      "compare against when a file has been deleted or moved. Present "
+      "for schema parity with the five tools that do detect (drain "
+      "2026-08-03-1540), so wizard's HARD RULE 3b reads the same field "
+      "on every git-touching tool instead of remembering which five "
+      "carry it. False here means NOT CHECKED, which is a weaker claim "
+      "than the False those five return."
+    ),
+  )
+  foreign_changes_summary: str | None = Field(
+    default=None,
+    description=(
+      "drain 2026-08-05-0830. Always None for this tool — see "
+      "foreign_changes_detected. Present for schema parity only."
+    ),
+  )
 
 class RegisterVaultResult(BaseModel):
   """Result envelope for forge_register_vault (runtime registration).
