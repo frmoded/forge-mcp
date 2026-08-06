@@ -149,11 +149,15 @@ class TestReadNotesInVaultTool:
     # these fixture notes which don't carry the frontmatter field.
     # `type` added in drain 2026-07-26-1200; defaults to "vanilla"
     # when frontmatter carries no `type` field.
+    # `source_vault` + `collides_with` added in drain 2026-08-06-0200
+    # (vault-split 3d); with no registry in play the source is the
+    # vault dir's own identity and no collisions are possible.
     for entry in notes:
       assert set(entry.keys()) == {
         "note_id", "name", "path", "has_recipe", "recipe_version",
-        "sync_state", "type",
+        "sync_state", "type", "source_vault", "collides_with",
       }
+      assert entry["collides_with"] == []
 
   @pytest.mark.asyncio
   async def test_tool_empty_vault_returns_empty_success(self, empty_vault: Path):
@@ -201,6 +205,7 @@ class TestVaultNoteEntrySchema:
       name="slow_burn",
       path="music/slow_burn.md",
       has_recipe=True,
+      source_vault="music",
       recipe_version=3,
     )
     assert entry.recipe_version == 3
@@ -208,6 +213,7 @@ class TestVaultNoteEntrySchema:
   def test_recipe_version_defaults_to_none(self):
     entry = VaultNoteEntry(
       note_id="foo", name="foo", path="foo.md", has_recipe=False,
+      source_vault="music",
     )
     assert entry.recipe_version is None
 
@@ -218,6 +224,7 @@ class TestVaultNoteEntrySchema:
     with pytest.raises(ValidationError):
       VaultNoteEntry(
         note_id="x", name="x", path="x.md", has_recipe=True,
+      source_vault="music",
         state="committed",  # type: ignore[call-arg]
         source_facet="recipe",  # type: ignore[call-arg]
         latest_recipe_version=1,  # type: ignore[call-arg]
@@ -230,12 +237,14 @@ class TestVaultNoteEntrySchema:
     matches the "field absent from frontmatter" case per drain 1700."""
     entry = VaultNoteEntry(
       note_id="foo", name="foo", path="foo.md", has_recipe=False,
+      source_vault="music",
     )
     assert entry.sync_state is None
 
   def test_sync_state_accepts_known_value(self):
     entry = VaultNoteEntry(
       note_id="foo", name="foo", path="foo.md", has_recipe=False,
+      source_vault="music",
       sync_state="stale-recipe",
     )
     assert entry.sync_state == "stale-recipe"
@@ -245,6 +254,7 @@ class TestVaultNoteEntrySchema:
     surface without erroring. Matches drain 1700 §4 B.4 rationale."""
     entry = VaultNoteEntry(
       note_id="foo", name="foo", path="foo.md", has_recipe=False,
+      source_vault="music",
       sync_state="future-phase-2-state",
     )
     assert entry.sync_state == "future-phase-2-state"

@@ -27,11 +27,15 @@ def test_vault_output_schema_lists_every_note_field_as_required() -> None:
   optional at the JSON-schema level (nullable) since notes never
   committed via forge_commit_recipe don't have the stamp."""
   item_schema = read_notes_in_vault.OUTPUT_SCHEMA["properties"]["notes"]["items"]
+  # `source_vault` required since vault-split 3d (drain 2026-08-06-0200);
+  # `collides_with` is additive-optional (always emitted, empty when
+  # the bare name is unique).
   assert set(item_schema["required"]) == {
     "note_id",
     "name",
     "path",
     "has_recipe",
+    "source_vault",
   }
   # recipe_version is present as a nullable property but not required.
   assert "recipe_version" in item_schema["properties"]

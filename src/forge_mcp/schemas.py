@@ -160,6 +160,24 @@ class VaultNoteEntry(BaseModel):
       "that live alongside them."
     ),
   )
+  # Vault-split Phase 3 3d (drain 2026-08-06-0200) — cross-vault
+  # provenance at the wizard-facing listing surface.
+  source_vault: str = Field(
+    ...,
+    description=(
+      "Where the note lives: the calling vault's name for local notes, "
+      "or the `[imports]` declaration name for imported notes. Always "
+      "the declared name, never the on-disk path."
+    ),
+  )
+  collides_with: list[str] = Field(
+    default_factory=list,
+    description=(
+      "Other sources in this listing that also define a note with the "
+      "same bare name (the unit bare wikilinks resolve by). Empty when "
+      "the name is unique across local + imports."
+    ),
+  )
 
 
 class VaultListResult(BaseModel):

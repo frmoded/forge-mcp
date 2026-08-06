@@ -17,6 +17,7 @@ is deferred to a future `forge_describe_note` polish drain.
 from __future__ import annotations
 
 import os
+import tomllib
 from pathlib import Path
 from typing import Any
 
@@ -51,7 +52,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["note_id", "name", "path", "has_recipe"],
+        "required": ["note_id", "name", "path", "has_recipe", "source_vault"],
         "properties": {
           "note_id": {"type": "string"},
           "name": {"type": "string"},
@@ -59,6 +60,8 @@ OUTPUT_SCHEMA: dict[str, Any] = {
           "has_recipe": {"type": "boolean"},
           "recipe_version": {"type": ["integer", "null"], "minimum": 0},
           "type": {"type": "string", "enum": ["action", "data", "vanilla"]},
+          "source_vault": {"type": "string"},
+          "collides_with": {"type": "array", "items": {"type": "string"}},
         },
       },
     }
@@ -66,11 +69,14 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 }
 
 DESCRIPTION = (
-  "List vault notes. Walks the local vault directory (set by "
-  "FORGE_VAULT_PATH env, default ~/forge-vaults/bluh) and returns one "
-  "entry per `.md` file with `{note_id, name, path, has_recipe, "
-  "recipe_version}`. Optional `filter` argument does a substring match "
-  "on note_id. Hidden dirs (`.obsidian/`, `.git/`, etc.) are excluded. "
+  "List vault notes. Walks the vault directory and returns one entry "
+  "per `.md` file with `{note_id, name, path, has_recipe, "
+  "recipe_version, source_vault}`. When the vault's forge.toml declares "
+  "[imports], imported vaults' notes are appended after the local ones "
+  "in declaration order, each tagged with the import NAME as "
+  "source_vault; a `collides_with` list flags bare-name twins across "
+  "sources. Optional `filter` argument does a substring match on "
+  "note_id. Hidden dirs (`.obsidian/`, `.git/`, etc.) are excluded. "
   "Symmetric with forge_commit_recipe — both read/write the same vault."
 )
 
@@ -81,6 +87,57 @@ def _vault_root_from_env() -> Path:
   `commit_recipe._vault_root_from_env` so the two tools stay in sync."""
   raw = os.environ.get("FORGE_VAULT_PATH", "~/forge-vaults/bluh").strip()
   return Path(raw).expanduser()
+
+
+def _vault_name_from_manifest(vault_fs: VaultFS) -> str:
+  """Best-effort vault name for the registry-less seams (injected
+  `vault_fs` / FORGE_VAULT_PATH): the forge.toml `name` when readable,
+  else the root directory's basename. Registry callers never reach
+  this — their name is the registration key."""
+  manifest = vault_fs.root / "forge.toml"
+  if manifest.exists():
+    try:
+      name = tomllib.loads(manifest.read_text(encoding="utf-8")).get("name")
+      if isinstance(name, str) and name.strip():
+        return name.strip()
+    except (tomllib.TOMLDecodeError, OSError):
+      pass  # fall through — a bad manifest shouldn't break a read-only listing
+  return vault_fs.root.name
+
+
+def _tag_and_flag(
+  groups: list[tuple[str, list[dict]]],
+) -> list[VaultNoteEntry]:
+  """Tag each raw walker entry with its source and flag cross-source
+  bare-name twins.
+
+  `groups` is ordered: local first, then imports in `[imports]`
+  declaration order. The collision unit is the bare name (`name`
+  field) — that is what bare wikilinks resolve by (see
+  vault_link_resolver's bare-form search), so it is the granularity at
+  which a caller needs disambiguation. Same-source internal twins are
+  the engine collision guard's territory, not this listing's.
+  """
+  name_sources: dict[str, list[str]] = {}
+  for source, raw in groups:
+    for entry in raw:
+      name_sources.setdefault(entry["name"], []).append(source)
+
+  notes: list[VaultNoteEntry] = []
+  for source, raw in groups:
+    for entry in raw:
+      seen: set[str] = set()
+      others: list[str] = []
+      for s in name_sources[entry["name"]]:
+        if s != source and s not in seen:
+          seen.add(s)
+          others.append(s)
+      notes.append(
+        VaultNoteEntry.model_validate(
+          {**entry, "source_vault": source, "collides_with": others}
+        )
+      )
+  return notes
 
 
 def _summary_text(notes: list[VaultNoteEntry], filter_: str | None) -> str:
@@ -111,6 +168,11 @@ async def run(
   filter_ = arguments.get("filter")
   vault_name = arguments.get("vault")
 
+  # Vault-split 3d (drain 2026-08-06-0200): every entry carries
+  # source_vault. Imports exist only in the registry (it is the sole
+  # parser/owner of [imports] roots — drain 1900 3b), so the injected-
+  # vault_fs and FORGE_VAULT_PATH seams list local notes only.
+  import_roots: dict[str, VaultFS] = {}
   if vault_fs is None:
     if vault_registry is not None:
       try:
@@ -121,6 +183,8 @@ async def run(
           "structuredContent": {"notes": []},
           "isError": True,
         }
+      local_name = vault_name if vault_name else vault_registry.names()[0]
+      import_roots = vault_registry.get_import_roots(vault_name)
     else:
       try:
         vault_fs = VaultFS(root=_vault_root_from_env())
@@ -138,9 +202,17 @@ async def run(
           "structuredContent": {"notes": []},
           "isError": True,
         }
+      local_name = _vault_name_from_manifest(vault_fs)
+  else:
+    local_name = _vault_name_from_manifest(vault_fs)
 
-  raw_entries = vault_fs.list_notes(filter=filter_)
-  notes = [VaultNoteEntry.model_validate(e) for e in raw_entries]
+  groups: list[tuple[str, list[dict]]] = [
+    (local_name, vault_fs.list_notes(filter=filter_))
+  ]
+  for import_name, import_fs in import_roots.items():
+    groups.append((import_name, import_fs.list_notes(filter=filter_)))
+
+  notes = _tag_and_flag(groups)
   result = VaultListResult(notes=notes)
   return {
     "content": [{"type": "text", "text": _summary_text(notes, filter_)}],
