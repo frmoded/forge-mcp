@@ -170,12 +170,14 @@ async def test_create_note_shell_writes_v2a_frontmatter(
     f"recipe_derived_from_source_hash: {description_hash}",
     f"python_derived_from_recipe_hash: {empty_hash}",
     f"python_derived_from_source_hash: {description_hash}",
-    f"english_hash: {empty_hash}",
   ):
     assert f"\n{line}\n" in content, f"missing frontmatter line: {line}"
 
   # CW-2305 still holds — the hexa-state did not smuggle the stamp back.
   assert "recipe_version" not in content
+  # [2026-08-06-1900] — english_hash stamp removed (absent beats empty);
+  # see test_shell_omits_english_hash_stamp.
+  assert "english_hash" not in content
 
 
 @pytest.mark.asyncio
@@ -337,3 +339,25 @@ async def test_commit_recipe_preserves_extra_frontmatter_fields(
   assert "recipe_version: 0" not in content
   # Still exactly one frontmatter block.
   assert content.count("\n---\n") == 1  # only the closing fence has \n---\n context
+
+
+@pytest.mark.asyncio
+async def test_shell_omits_english_hash_stamp(
+  single_vault_registry: VaultRegistry,
+):
+  """[2026-08-06-1900] — the shell must NOT stamp english_hash.
+
+  CCQA v0.2.331 smoke: a present-but-empty english_hash (sha256(""))
+  fails the engine's cache-equality check and drops into a doomed E--
+  re-transpile, while an ABSENT english_hash means "no invalidation
+  contract, serve the cached # Python" (executor.py:956-957). The
+  plugin eliminated all empty-stamp writers at drain 2026-08-05-2100;
+  the shell template here was the remaining ACTIVE writer, recreating
+  the known-bad state on every MCP-authored note. english_hash is a
+  V1/# English-facet contract — V2 shells have no # English facet, so
+  the honest stamp is no stamp at all (absent beats empty).
+  """
+  vault_fs = single_vault_registry.get(None)
+  vault_fs.create_note_shell("mytest/no_english_hash", "Say hi")
+  content = (vault_fs.root / "mytest" / "no_english_hash.md").read_text()
+  assert "english_hash" not in content

@@ -928,7 +928,14 @@ class VaultFS:
       f"recipe_derived_from_source_hash: {description_hash}\n"
       f"python_derived_from_recipe_hash: {empty_hash}\n"
       f"python_derived_from_source_hash: {description_hash}\n"
-      f"english_hash: {empty_hash}\n"
+      # NO english_hash stamp ([2026-08-06-1900]). A present-but-empty
+      # english_hash fails the engine's cache-equality check and drops
+      # into a doomed E-- re-transpile; ABSENT means "no invalidation
+      # contract, serve cached # Python" (executor.py:956-957).
+      # english_hash is a V1 / # English-facet contract — V2 shells
+      # have no # English facet, so absent beats empty. This was the
+      # last ACTIVE empty-SHA writer after the plugin's drain
+      # 2026-08-05-2100 sweep (CCQA v0.2.331 smoke evidence).
       "---\n"
     )
     if desc_body:
