@@ -260,3 +260,21 @@ async def test_drain_1110_real_senders_still_report_their_name(_messages_root: P
   )
   msgs = result["structuredContent"]["messages"]
   assert msgs[0]["from"] == "forge-reviewer", msgs[0]
+
+
+# --- [2026-08-06-2100] dead forge-music lane removed (mirror of write side)
+
+
+@pytest.mark.asyncio
+async def test_read_refuses_forge_music_target(_messages_root: Path):
+  result = await read_messages.run_read(
+    arguments={"to": "forge-music"}, bearer="tok",
+  )
+  assert result["isError"] is True
+
+
+def test_read_target_allowlist_matches_expected():
+  assert read_messages._ALLOWED_TARGETS == {
+    "forge-core", "forge-reviewer", "ccqa", "ccdocs", "forge-doc",
+    "forge-moda", "wizard",
+  }

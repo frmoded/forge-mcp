@@ -38,13 +38,18 @@ _DEFAULT_MESSAGES_ROOT = "~/projects/forge-moda-bootstrap/messages"
 
 # Whitelists — extend by adding to these sets. Kept lowercase per repo
 # convention (directory names are all lowercase with dashes).
+# [2026-08-06-2100] — 'forge-music' removed from targets: the lane was
+# retired in drain 1800's Phase 5 rename (music vault repo is now
+# music-theory); addressing new mail to it would create an inbox nobody
+# reads. Historical messages under from-forge-music/ stay as archive.
+# 'cc' added to sources: the drain-executor lane sends drain reports.
 _ALLOWED_TARGETS = {
   "forge-core", "forge-reviewer", "ccqa",
-  "ccdocs", "forge-doc", "forge-moda", "forge-music",
+  "ccdocs", "forge-doc", "forge-moda",
 }
 _ALLOWED_SOURCES = {
   "wizard", "forge-core", "forge-reviewer", "ccqa",
-  "ccdocs", "forge-doc",
+  "ccdocs", "forge-doc", "cc",
 }
 
 # Matches vault_fs._NOTE_ID_SEGMENT — same char allowlist for slug

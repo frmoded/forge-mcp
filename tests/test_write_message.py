@@ -283,3 +283,62 @@ async def test_drain_1650_ccqa_survives_as_target_and_source(_messages_root: Pat
   )
   assert result2["isError"] is False, result2
   assert "/pending/to-ccqa/from-forge-core/" in result2["structuredContent"]["path"]
+
+
+# --- [2026-08-06-2100] sender allowlist: add cc; drop dead forge-music lane
+
+
+@pytest.mark.asyncio
+async def test_write_message_accepts_from_cc(_messages_root: Path):
+  """CC (the drain executor lane) is a first-class sender.
+
+  Motivating case: CC's 2026-08-06 drain report had to fall back to a
+  direct file write because from='cc' was rejected.
+  """
+  result = await write_message.run(
+    arguments={"to": "forge-core", "body": "# Test\n\nThis is a test from cc.",
+               "from": "cc"},
+    bearer="tok",
+  )
+  assert result["isError"] is False, result
+  assert "/pending/to-forge-core/from-cc/" in result["structuredContent"]["path"]
+
+
+@pytest.mark.asyncio
+async def test_write_message_rejects_from_forge_music(_messages_root: Path):
+  """Regression guard against reintroducing the dead lane as a sender."""
+  result = await write_message.run(
+    arguments={"to": "forge-core", "body": "x", "from": "forge-music"},
+    bearer="tok",
+  )
+  assert result["isError"] is True
+
+
+@pytest.mark.asyncio
+async def test_write_message_rejects_to_forge_music(_messages_root: Path):
+  """Deviation from the prompt's letter, per its own intent: forge-music
+  was never in _ALLOWED_SOURCES — the dead lane lived in
+  _ALLOWED_TARGETS. The lane was retired in drain 1800's Phase 5 rename;
+  addressing new messages to it would create an inbox nobody reads."""
+  result = await write_message.run(
+    arguments={"to": "forge-music", "body": "x", "from": "forge-core"},
+    bearer="tok",
+  )
+  assert result["isError"] is True
+
+
+def test_sender_allowlist_matches_expected():
+  """Pin the full sender set so future edits are deliberate."""
+  assert write_message._ALLOWED_SOURCES == {
+    "wizard", "forge-core", "forge-reviewer", "ccqa", "ccdocs",
+    "forge-doc", "cc",
+  }
+
+
+def test_target_allowlist_matches_expected():
+  """Pin the write-side target set (no wizard here — read_messages adds
+  wizard's own inbox separately, a deliberate asymmetry)."""
+  assert write_message._ALLOWED_TARGETS == {
+    "forge-core", "forge-reviewer", "ccqa", "ccdocs", "forge-doc",
+    "forge-moda",
+  }

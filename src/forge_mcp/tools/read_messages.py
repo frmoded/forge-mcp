@@ -41,9 +41,11 @@ _MAX_LIMIT = 100
 _DEFAULT_TRUNCATE_KB = 500
 
 # Match write_message's whitelist so read/write are symmetric.
+# [2026-08-06-2100] — 'forge-music' removed (dead lane post drain-1800
+# Phase 5 rename), mirroring the write side.
 _ALLOWED_TARGETS = {
   "forge-core", "forge-reviewer", "ccqa",
-  "ccdocs", "forge-doc", "forge-moda", "forge-music",
+  "ccdocs", "forge-doc", "forge-moda",
   "wizard",  # wizard's own inbox — reviewers reply here
 }
 
