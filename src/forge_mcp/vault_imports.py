@@ -1,5 +1,14 @@
 r"""`forge.toml [imports]` parsing + validation (drain 2026-08-05-0710).
 
+CANONICAL HOME (drain 2026-08-09-2100): forge/forge/core/vault_imports.py.
+forge-mcp carries a byte-identical vendored copy at
+forge-mcp/src/forge_mcp/vault_imports.py — forge-mcp deliberately does
+not depend on the forge package (its deps are mcp/httpx/pydantic only),
+so the sharing model is vendoring, same as forge-transpile's
+engine_libs and the plugin's engine bundle. Keep the two files
+byte-identical; forge-mcp's scripts/check-vault-imports-drift.sh diffs
+them and must report clean before either repo ships a change here.
+
 Phase 2 of the vault split. The schema is frozen in
 `forge/docs/specs/vault-imports.md` (drain 2026-08-03-1500); this is the
 first code to read it.
@@ -29,7 +38,10 @@ spelling for `local`, so this reads `local` per the spec and rejects
 """
 from __future__ import annotations
 
-import tomllib
+try:
+  import tomllib
+except ImportError:  # Pyodide / <3.11 — same fallback as forge.core.manifest
+  import tomli as tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
