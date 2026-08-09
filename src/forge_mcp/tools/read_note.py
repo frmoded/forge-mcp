@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from ..error_response import ForgeError, to_tool_response
 from ..schemas import NoteContent, ReadNoteResult
 from ..vault_fs import NoteIdInvalid, NoteNotFound, VaultFSError
 from ..vault_registry import VaultNotFoundError, VaultRegistry
@@ -73,10 +74,20 @@ DESCRIPTION = (
 )
 
 
-def _error(text: str, *, note_id: str, vault: str) -> dict[str, Any]:
-  return {
-    "content": [{"type": "text", "text": text}],
-    "structuredContent": {
+def _error(
+  cause: str,
+  suggested_fix: str,
+  *,
+  note_id: str,
+  vault: str,
+  details: str | None = None,
+) -> dict[str, Any]:
+  # Drain 2026-08-08-1300 — structured 3-field error shape (parity
+  # with the plugin's Forge Output panel). The OUTPUT_SCHEMA-required
+  # empty note placeholder rides along as structured_base.
+  return to_tool_response(
+    ForgeError(cause=cause, suggested_fix=suggested_fix, details=details),
+    structured_base={
       "note": {
         "note_id": note_id,
         "vault": vault,
@@ -90,8 +101,7 @@ def _error(text: str, *, note_id: str, vault: str) -> dict[str, Any]:
         "type": "vanilla",
       },
     },
-    "isError": True,
-  }
+  )
 
 
 async def run(
@@ -105,6 +115,8 @@ async def run(
   if not isinstance(note_id, str) or not note_id.strip():
     return _error(
       "Missing required argument: 'note_id' (vault-relative path).",
+      "Pass note_id as the note's vault-relative path, "
+      "e.g. 'exercises/scale_drill'.",
       note_id="",
       vault=str(vault_name or ""),
     )
@@ -112,7 +124,13 @@ async def run(
   try:
     vault_fs = vault_registry.get(vault_name)
   except VaultNotFoundError as exc:
-    return _error(str(exc), note_id=note_id, vault=str(vault_name or ""))
+    return _error(
+      str(exc),
+      "Pick a registered vault from forge_list_vaults, or register "
+      "this one with forge_register_vault.",
+      note_id=note_id,
+      vault=str(vault_name or ""),
+    )
 
   effective_vault_name = vault_name if vault_name else vault_registry.names()[0]
 
@@ -120,17 +138,27 @@ async def run(
     content = vault_fs.read_note_content(note_id)
   except NoteIdInvalid as exc:
     return _error(
-      f"Invalid note_id: {exc}", note_id=note_id, vault=effective_vault_name,
+      f"Invalid note_id: {exc}",
+      "Use a plain vault-relative path (no '..', no leading '/', "
+      "no hidden segments).",
+      note_id=note_id,
+      vault=effective_vault_name,
     )
   except NoteNotFound as exc:
     return _error(
-      f"{exc} Use forge_read_notes_in_vault to list available notes.",
+      str(exc),
+      "Use forge_read_notes_in_vault to list available notes, then "
+      "retry with an exact note_id from that list.",
       note_id=note_id,
       vault=effective_vault_name,
     )
   except VaultFSError as exc:
     return _error(
-      f"Vault read failed: {exc}", note_id=note_id, vault=effective_vault_name,
+      f"Vault read failed: {exc}",
+      "Check the vault path is reachable on disk, then retry.",
+      note_id=note_id,
+      vault=effective_vault_name,
+      details=repr(exc),
     )
 
   # Normalize the note_id in the response (strip .md).
