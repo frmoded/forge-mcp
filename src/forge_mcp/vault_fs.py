@@ -767,6 +767,23 @@ class VaultFS:
       _stamped = _set_frontmatter_key(
         _txt, "recipe_hash", compute_facet_hash(_reread)
       )
+      # Drain 2026-08-14-0130 — sync_state after a commit is NOT
+      # unconditionally "synced". commit_recipe writes the Recipe and does
+      # NOT re-transpile: a note carrying a Python facet is left genuinely
+      # derived-from-the-OLD-Recipe, so stamping "synced" would certify a
+      # derivation that never happened (I18 — "never certify a derivation
+      # that didn't happen"). Verified empirically: committing "Return 999."
+      # over a note whose Python returns 1 leaves that Python untouched.
+      #
+      # Values match the plugin's computeSyncState semantics
+      # (facet-hash-core.ts: pythonMismatch -> 'stale-python'), so the two
+      # producers agree rather than each inventing a vocabulary. sync_state
+      # is typed `str | None` in schemas.py:134 on purpose — the MCP layer
+      # surfaces what producers write rather than constraining it — so this
+      # needed no schema change.
+      _py = self.read_note_content(note_id).get("python")
+      _next_state = "stale-python" if (_py or "").strip() else "synced"
+      _stamped = _set_frontmatter_key(_stamped, "sync_state", _next_state)
       if _stamped != _txt:
         _atomic_write(path, _stamped)
 

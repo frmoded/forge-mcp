@@ -719,3 +719,52 @@ def test_commit_recipe_stamps_brand_new_note_without_corrupting_body(vault_root:
   )
   assert recipe.strip() == "Let x = 7.\nReturn x."
   assert _stamped_hash(vault_root, "notes/brand_new") == compute_facet_hash(recipe)
+
+
+# ---------------------------------------------------------------------------
+# sync_state after commit (drain 2026-08-14-0130).
+# NOT unconditionally "synced": commit_recipe writes the Recipe but does NOT
+# re-transpile Python, so a note WITH a Python section is left genuinely
+# stale-python. Stamping "synced" there would certify a derivation that never
+# happened (I18). Matches the plugin's own computeSyncState semantics:
+# pythonMismatch -> 'stale-python'.
+# ---------------------------------------------------------------------------
+
+
+def _sync_state(root: Path, note_id: str) -> str:
+  import re
+  m = re.search(r"^sync_state: (\S+)", (root / f"{note_id}.md").read_text(), re.M)
+  return m.group(1) if m else ""
+
+
+def test_commit_recipe_sets_synced_when_note_has_no_python(vault_root: Path):
+  """(a) No Python facet -> nothing left stale -> synced."""
+  from forge_mcp.vault_fs import VaultFS
+
+  _shell_note(vault_root, "notes/nopy")
+  VaultFS(root=vault_root).commit_recipe("notes/nopy", "Return 42.", expected_version=None)
+  assert _sync_state(vault_root, "notes/nopy") == "synced"
+
+
+def test_commit_recipe_sets_stale_python_when_python_present(vault_root: Path):
+  """(b) Python exists and was NOT re-transpiled -> stale-python, not synced."""
+  from forge_mcp.vault_fs import VaultFS
+
+  p = vault_root / "notes" / "withpy.md"
+  p.parent.mkdir(parents=True, exist_ok=True)
+  p.write_text(
+    "---\ntype: action\nsync_state: stale-recipe\n---\n"
+    "\n# Description\n\nd.\n\n# Recipe\n\nReturn 1.\n"
+    "\n# Python\n\n```python\ndef compute(context):\n  return 1\n```\n",
+    encoding="utf-8",
+  )
+  VaultFS(root=vault_root).commit_recipe("notes/withpy", "Return 999.", expected_version=None)
+  assert _sync_state(vault_root, "notes/withpy") == "stale-python", (
+    "commit_recipe does not re-transpile, so the Python facet is genuinely stale"
+  )
+
+
+def test_commit_recipe_sync_state_untouched_shell_regression(vault_root: Path):
+  """(c) A never-committed shell keeps its creation-time stamp."""
+  _shell_note(vault_root, "notes/shell_ss")
+  assert _sync_state(vault_root, "notes/shell_ss") == "stale-recipe"
