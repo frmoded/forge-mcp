@@ -169,6 +169,42 @@ def resolve_link(
       ),
     )
 
+  # --- slash form: `[[import-name/path/to/note]]` -------------------
+  # Drain 2026-08-13-0430. A slash link carries its whole string as
+  # note_id, so `exists("music-core", "music-core/percussion_lab/x")`
+  # hunts that FULL path inside music-core and misses — the link fell
+  # through to engine-fallback and died later as a NameError. When the
+  # first segment names a declared import, retry the remainder against
+  # that vault.
+  #
+  # Note the deliberate asymmetry with the bare form below: there,
+  # local-first wins outright and is exempt from the collision rule.
+  # Here a local/import tie is an ERROR, per this drain's section 4.3.
+  # The reasoning differs because the shapes differ — a bare `[[x]]`
+  # naming a local note is unambiguous authorial intent, whereas
+  # `[[music-core/...]]` reads as naming a vault, so a local directory
+  # that happens to share the name is a genuine collision the author
+  # should be told about rather than have silently resolved.
+  slash_import: str | None = None
+  slash_remainder: str | None = None
+  if "/" in ref.note_id:
+    head, _, rest = ref.note_id.partition("/")
+    if head in imports and rest and exists(head, rest):
+      slash_import, slash_remainder = head, rest
+
+  if slash_import is not None and exists(None, ref.note_id):
+    return Unresolved(
+      ref=ref,
+      reason="ambiguous",
+      message=(
+        f"[[{ref.raw}]] is ambiguous — it resolves both as a local path "
+        f"in {local_vault} and as '{slash_remainder}' in import "
+        f"'{slash_import}'. Rename the local path, or drop the "
+        f"'{slash_import}/' prefix if you meant the local one."
+      ),
+      candidates=(local_vault, slash_import),
+    )
+
   # --- bare form: local first --------------------------------------
   # Local-first is deliberate and is NOT subject to the collision rule
   # below: a vault's own notes are the ones its author controls, and an
@@ -176,6 +212,14 @@ def resolve_link(
   # somebody else's repo.
   if exists(None, ref.note_id):
     return Resolved(ref=ref, source_vault=None)
+
+  if slash_import is not None:
+    # Strip the vault-name segment so downstream lookups search the
+    # importing vault's own tree, not a path prefixed with its name.
+    return Resolved(
+      ref=LinkRef(raw=ref.raw, note_id=slash_remainder, namespace=ref.namespace),
+      source_vault=slash_import,
+    )
 
   hits = [name for name in imports if exists(name, ref.note_id)]
 

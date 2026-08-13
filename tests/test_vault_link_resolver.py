@@ -279,3 +279,74 @@ class TestReturnShape:
     # relative to previous behaviour for them.
     assert resolve("scale", {None: {"scale"}}, []).source_vault is None
     assert resolve("print", {}, []).is_engine_fallback is True
+
+
+# ---------------------------------------------------------------------------
+# Slash-form cross-vault resolution (drain 2026-08-13-0430).
+# `[[music-core/percussion_lab/solitary]]` from a vault importing music-core:
+# the whole string is note_id, so exists("music-core", <whole string>) looks
+# for that path INSIDE music-core and misses. Strip the matching first segment.
+# ---------------------------------------------------------------------------
+
+
+def _exists_from(tree):
+  """tree: {vault_or_None: {note_id, ...}} -> an `exists` callable."""
+  return lambda source_vault, note_id: note_id in tree.get(source_vault, set())
+
+
+def test_slash_form_resolves_into_matching_import():
+  """(a) Only the import satisfies it — today falls through silently."""
+  out = resolve_link(
+    "music-core/percussion_lab/solitary",
+    local_vault="music-theory",
+    imports={"music-core": object()},
+    exists=_exists_from({"music-core": {"percussion_lab/solitary"}}),
+  )
+  assert isinstance(out, Resolved), out
+  assert out.source_vault == "music-core"
+  assert out.is_engine_fallback is False
+  assert out.ref.note_id == "percussion_lab/solitary", (
+    "the vault-name segment must be stripped so the importing vault's own "
+    f"tree is searched; got {out.ref.note_id!r}"
+  )
+
+
+def test_slash_form_local_path_still_wins():
+  """(b) Regression guard: a real local path is unchanged by this drain."""
+  out = resolve_link(
+    "music-core/percussion_lab/solitary",
+    local_vault="music-theory",
+    imports={"music-core": object()},
+    exists=_exists_from({None: {"music-core/percussion_lab/solitary"}}),
+  )
+  assert isinstance(out, Resolved), out
+  assert out.source_vault is None
+  assert out.ref.note_id == "music-core/percussion_lab/solitary"
+
+
+def test_slash_form_local_and_import_collision_is_ambiguous():
+  """(c) Both satisfy it — collected error naming both, never a silent pick."""
+  out = resolve_link(
+    "music-core/percussion_lab/solitary",
+    local_vault="music-theory",
+    imports={"music-core": object()},
+    exists=_exists_from({
+      None: {"music-core/percussion_lab/solitary"},
+      "music-core": {"percussion_lab/solitary"},
+    }),
+  )
+  assert isinstance(out, Unresolved), out
+  assert out.reason == "ambiguous"
+  assert "music-theory" in out.message and "music-core" in out.message, out.message
+
+
+def test_slash_form_matching_no_import_key_still_engine_fallback():
+  """(d) Regression guard: unrelated slash link keeps engine-fallback."""
+  out = resolve_link(
+    "some_dir/helper",
+    local_vault="music-theory",
+    imports={"music-core": object()},
+    exists=_exists_from({}),
+  )
+  assert isinstance(out, Resolved), out
+  assert out.is_engine_fallback is True
