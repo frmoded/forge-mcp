@@ -608,3 +608,114 @@ class TestCommitMessageParam:
     assert result["isError"] is False
     subject = _last_commit_subject(git_vault_root)
     assert subject.startswith("forge-mcp: commit recipe seed")
+
+
+# ---------------------------------------------------------------------------
+# recipe_hash recompute (drain 2026-08-13-2300, off drain 0210's root cause).
+# create_note stamps recipe_hash = sha256("") on a genuinely-empty shell —
+# correct at birth. commit_recipe then wrote real content and never touched
+# the hash, so every MCP-authored note that had ever been committed to
+# misreported its own body until someone re-stamped it by hand.
+# ---------------------------------------------------------------------------
+
+
+def _shell_note(root: Path, note_id: str, recipe: str = "") -> Path:
+  """A create_note-shaped shell: empty Recipe, empty-SHA hash stamped."""
+  from forge_mcp.facet_hash import compute_facet_hash
+
+  p = root / f"{note_id}.md"
+  p.parent.mkdir(parents=True, exist_ok=True)
+  p.write_text(
+    "---\n"
+    "type: action\n"
+    "inputs: []\n"
+    "sync_state: stale-recipe\n"
+    f"recipe_hash: {compute_facet_hash('')}\n"
+    "---\n"
+    "\n# Description\n\ndoc.\n"
+    f"\n# Recipe\n\n{recipe}\n",
+    encoding="utf-8",
+  )
+  return p
+
+
+def _hash_of_read_back(root: Path, note_id: str) -> str:
+  """compute_facet_hash over the Recipe as the SYSTEM reads it back."""
+  from forge_mcp.facet_hash import compute_facet_hash
+  from forge_mcp.vault_fs import VaultFS
+
+  fs = VaultFS(root=root)
+  return compute_facet_hash(fs.read_note_content(note_id)["recipe"])
+
+
+def _stamped_hash(root: Path, note_id: str) -> str:
+  import re
+
+  m = re.search(r"^recipe_hash: (\S+)", (root / f"{note_id}.md").read_text(), re.M)
+  return m.group(1) if m else ""
+
+
+def test_commit_recipe_recomputes_hash_on_first_commit(vault_root: Path):
+  """(a) Shell with empty-SHA hash -> real Recipe -> hash matches content."""
+  from forge_mcp.facet_hash import compute_facet_hash
+  from forge_mcp.vault_fs import VaultFS
+
+  _shell_note(vault_root, "notes/fresh")
+  fs = VaultFS(root=vault_root)
+  fs.commit_recipe("notes/fresh", "Return 42.", expected_version=None)
+
+  stamped = _stamped_hash(vault_root, "notes/fresh")
+  assert stamped != compute_facet_hash(""), "hash still the empty-string SHA"
+  assert stamped == _hash_of_read_back(vault_root, "notes/fresh"), (
+    "stamped hash must match what the system reads back, not the intended write"
+  )
+
+
+def test_commit_recipe_updates_hash_on_recommit(vault_root: Path):
+  """(b) Re-commit -> hash tracks the NEW body, not the previous one."""
+  from forge_mcp.vault_fs import VaultFS
+
+  _shell_note(vault_root, "notes/twice")
+  fs = VaultFS(root=vault_root)
+  fs.commit_recipe("notes/twice", "Return 1.", expected_version=None)
+  first = _stamped_hash(vault_root, "notes/twice")
+
+  fs.commit_recipe("notes/twice", "Return 2.", expected_version=None)
+  second = _stamped_hash(vault_root, "notes/twice")
+
+  assert second != first, "hash did not move when the Recipe changed"
+  assert second == _hash_of_read_back(vault_root, "notes/twice")
+
+
+def test_commit_recipe_leaves_untouched_shell_alone(vault_root: Path):
+  """(c) Regression guard — a never-committed shell keeps its empty-SHA hash.
+
+  This drain must not go stamping notes nobody committed to.
+  """
+  from forge_mcp.facet_hash import compute_facet_hash
+
+  _shell_note(vault_root, "notes/never")
+  assert _stamped_hash(vault_root, "notes/never") == compute_facet_hash("")
+
+
+def test_commit_recipe_stamps_brand_new_note_without_corrupting_body(vault_root: Path):
+  """(d) The path my first three tests MISSED, per this drain's FEEDBACK §4.
+
+  A note created BY commit_recipe has no `recipe_hash:` key in its template.
+  The first implementation used _update_frontmatter_line, which appended the
+  line to the END OF THE FILE — into the Recipe body — corrupting the note.
+  Every earlier test seeded a shell that already had the key, so all three
+  passed while the real path was broken. Only the live-verify caught it.
+  """
+  from forge_mcp.facet_hash import compute_facet_hash
+  from forge_mcp.vault_fs import VaultFS
+
+  fs = VaultFS(root=vault_root)
+  fs.commit_recipe("notes/brand_new", "Let x = 7.\nReturn x.", expected_version=None)
+
+  recipe = fs.read_note_content("notes/brand_new")["recipe"]
+  assert "recipe_hash" not in recipe, (
+    f"hash leaked into the Recipe body: {recipe!r}"
+  )
+  assert recipe.strip() == "Let x = 7.\nReturn x."
+  assert _stamped_hash(vault_root, "notes/brand_new") == compute_facet_hash(recipe)

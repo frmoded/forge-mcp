@@ -227,6 +227,36 @@ def _render_inputs_yaml(inputs: list[str]) -> str:
   return "[" + ", ".join(parts) + "]"
 
 
+def _set_frontmatter_key(text: str, key: str, value: str) -> str:
+  """Set `key: value` INSIDE the frontmatter block, inserting if absent.
+
+  Drain 2026-08-13-2300. Distinct from `_update_frontmatter_line`, which
+  replaces an existing line and — when the key is absent — has no
+  frontmatter-aware place to put it. Using it to stamp `recipe_hash` on a
+  note created by `commit_recipe` (whose template carries no such key)
+  appended the line to the END OF THE FILE, i.e. into the Recipe body,
+  corrupting the note. Caught by this drain's live-verify, not by its unit
+  tests, because those seeded shells that already had the key.
+
+  Returns `text` unchanged when there is no frontmatter block to edit —
+  a note without frontmatter is not this function's problem to invent.
+  """
+  if not text.startswith("---\n"):
+    return text
+  end = text.find("\n---", 4)
+  if end == -1:
+    return text
+  head, body = text[4:end], text[end:]
+  lines = head.split("\n")
+  for i, line in enumerate(lines):
+    if line.startswith(f"{key}:"):
+      lines[i] = f"{key}: {value}"
+      break
+  else:
+    lines.append(f"{key}: {value}")
+  return "---\n" + "\n".join(lines) + body
+
+
 def _update_frontmatter_line(text: str, key: str, value: str) -> str:
   """Replace `key: <old>` with `key: <value>`; append if key not present.
   Preserves everything else in the block byte-for-byte."""
@@ -711,6 +741,34 @@ class VaultFS:
         raw, new_recipe_body, new_version, inputs=inputs,
       )
       _atomic_write(path, new_content)
+
+    # Drain 2026-08-13-2300. create_note stamps recipe_hash = sha256("") on a
+    # genuinely-empty shell (line ~925) — correct at birth. Before this, nothing
+    # ever updated it again, so every note that had a Recipe committed
+    # misreported its own body until someone re-stamped by hand, which
+    # re-broke on the next commit.
+    #
+    # Hashed from the READ-BACK body, not the in-memory string just written:
+    # the two can differ (strip/newline handling in the parser), and the value
+    # that matters is the one a later reader will compute. Same
+    # compute_facet_hash + read_note_content pairing drain 0210 used and
+    # cross-verified byte-identical against Obsidian's own stamp.
+    #
+    # sync_state deliberately NOT touched — see this drain's FEEDBACK. The only
+    # sync_state literal discoverable in forge-mcp is "stale-recipe"; "synced"
+    # exists solely as a VaultSourceFacet value (schemas.py:91), which is a
+    # different field. Inventing a value here is what §8 forbids.
+    try:
+      _reread = self.read_note_content(note_id)["recipe"]
+    except (NoteNotFound, VaultFSError):
+      _reread = None
+    if _reread is not None:
+      _txt = path.read_text(encoding="utf-8")
+      _stamped = _set_frontmatter_key(
+        _txt, "recipe_hash", compute_facet_hash(_reread)
+      )
+      if _stamped != _txt:
+        _atomic_write(path, _stamped)
 
     git_sha: str | None = None
     if _is_git_tracked(self.root):
