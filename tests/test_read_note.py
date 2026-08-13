@@ -329,3 +329,99 @@ async def test_read_note_missing_sync_state(
   assert result["isError"] is False
   note = result["structuredContent"]["note"]
   assert note["sync_state"] is None
+
+
+# ---------------------------------------------------------------------------
+# undeclared_inputs_detected (drain 2026-08-13-0230, Option C from 2135).
+# A FLAG, not a derivation: `inputs` still reports only what is declared.
+# Wizard trusted `inputs: []` as "takes no parameters", omitted
+# inputs=["bars"] on commit, and hit a runtime TypeError from a zero-arg
+# function. This distinguishes "confidently none" from "none declared, but
+# the body wants some".
+# ---------------------------------------------------------------------------
+
+_NOTE_NO_INPUTS_CLEAN = """---
+type: action
+---
+
+# Description
+
+doc.
+
+# Recipe
+
+Let greeting = "hi".
+Return greeting.
+"""
+
+_NOTE_NO_INPUTS_BUT_BODY_WANTS = """---
+type: action
+---
+
+# Description
+
+doc.
+
+# Recipe
+
+Let kp = Call [[play_at_offsets]] with instrument=kick_i, bars=bars.
+Return kp.
+"""
+
+_NOTE_INPUTS_DECLARED = """---
+type: action
+inputs: [bars]
+---
+
+# Description
+
+doc.
+
+# Recipe
+
+Let kp = Call [[play_at_offsets]] with bars=bars.
+Return kp.
+"""
+
+
+async def _read(registry, note_id, body):
+  _write(registry.get().root, note_id, body)
+  result = await read_note.run(
+    arguments={"note_id": note_id}, bearer="tok", vault_registry=registry,
+  )
+  assert result["isError"] is False
+  return result["structuredContent"]["note"]
+
+
+@pytest.mark.asyncio
+async def test_undeclared_inputs_not_flagged_when_body_is_self_contained(
+  single_vault_registry: VaultRegistry,
+):
+  """(a) No inputs declared, no free identifiers → confidently none."""
+  note = await _read(single_vault_registry, "clean", _NOTE_NO_INPUTS_CLEAN)
+  assert note["inputs"] == []
+  assert note["undeclared_inputs_detected"] is False
+  assert note["undeclared_inputs_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_undeclared_inputs_flagged_when_body_references_free_name(
+  single_vault_registry: VaultRegistry,
+):
+  """(b) No inputs declared, body references `bars` → flagged."""
+  note = await _read(single_vault_registry, "wants", _NOTE_NO_INPUTS_BUT_BODY_WANTS)
+  assert note["inputs"] == [], "the flag must NOT change what `inputs` reports"
+  assert note["undeclared_inputs_detected"] is True
+  assert "bars" in (note["undeclared_inputs_summary"] or "")
+  assert "kick_i" in (note["undeclared_inputs_summary"] or "")
+
+
+@pytest.mark.asyncio
+async def test_undeclared_inputs_never_flagged_when_inputs_declared(
+  single_vault_registry: VaultRegistry,
+):
+  """(c) inputs declared → never flagged, regardless of body."""
+  note = await _read(single_vault_registry, "declared", _NOTE_INPUTS_DECLARED)
+  assert note["inputs"] == ["bars"]
+  assert note["undeclared_inputs_detected"] is False
+  assert note["undeclared_inputs_summary"] is None

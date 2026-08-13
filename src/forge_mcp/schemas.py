@@ -516,6 +516,25 @@ class NoteContent(BaseModel):
   python: str | None = Field(
     None, description="Body under `# Python`; None when absent."
   )
+  undeclared_inputs_detected: bool = Field(
+    False,
+    description=(
+      "Drain 2026-08-13-0230. True when NO inputs are declared and the "
+      "Recipe body still references free identifiers — i.e. `inputs: []` "
+      "here means 'nobody declared any', NOT 'this note takes none'. A "
+      "CAUTION FLAG, never a derivation: `inputs` remains declaration-only. "
+      "Always False when inputs are declared."
+    ),
+  )
+  undeclared_inputs_summary: str | None = Field(
+    None,
+    description=(
+      "Comma-separated free identifiers the scan saw, when "
+      "`undeclared_inputs_detected` is True; None otherwise. Advisory — "
+      "the scan is regex-based and non-authoritative, so treat it as "
+      "'check these', not as the note's input list."
+    ),
+  )
   data: str | None = Field(
     None,
     description=(

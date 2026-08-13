@@ -15,6 +15,7 @@ from typing import Any
 
 from ..error_response import ForgeError, to_tool_response
 from ..schemas import NoteContent, ReadNoteResult
+from ..undeclared_inputs import scan_undeclared_inputs
 from ..vault_fs import NoteIdInvalid, NoteNotFound, VaultFSError
 from ..vault_registry import VaultNotFoundError, VaultRegistry
 
@@ -163,6 +164,11 @@ async def run(
 
   # Normalize the note_id in the response (strip .md).
   normalized_note_id = note_id[:-3] if note_id.endswith(".md") else note_id
+  # Drain 2026-08-13-0230 — only meaningful when nothing was declared;
+  # a declared list is trusted and never re-flagged (drain section 4.3).
+  _undeclared = (
+    scan_undeclared_inputs(content["recipe"]) if not content["inputs"] else []
+  )
   note_content = NoteContent(
     note_id=normalized_note_id,
     vault=effective_vault_name,
@@ -172,6 +178,8 @@ async def run(
     python=content["python"],
     data=content["data"],
     inputs=content["inputs"],
+    undeclared_inputs_detected=bool(_undeclared),
+    undeclared_inputs_summary=", ".join(_undeclared) if _undeclared else None,
     raw=content["raw"],
     sync_state=content.get("sync_state"),
     type=content.get("type", "vanilla"),
