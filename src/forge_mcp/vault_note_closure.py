@@ -74,6 +74,25 @@ _WIKILINK_RE = re.compile(
 )
 
 
+class _AmbiguousBareName(Exception):
+  """A bare wikilink matched >1 note by basename across subdirectories.
+
+  Internal to the closure walk (drain 2026-08-12-2130): raised by
+  `_find_note_id`, caught at both call sites and surfaced as a
+  collected `ClosureResolutionError` so it rides the module's existing
+  report-every-broken-link contract rather than aborting the pass.
+  """
+
+  def __init__(self, name: str, candidates: list[str]) -> None:
+    self.name = name
+    self.candidates = candidates
+    super().__init__(
+      f"bare wikilink [[{name}]] is ambiguous — matches "
+      f"{', '.join(candidates)}. Fully-qualify the link "
+      f"(e.g. [[{candidates[0]}]]) to say which one you mean."
+    )
+
+
 class CircularVaultNoteError(Exception):
   """Raised when the vault-note closure walker detects a cycle.
 
@@ -176,7 +195,23 @@ def build_vault_note_closure(
 
   def _find_note_id(fs: VaultFS, name: str) -> str | None:
     """The concrete note_id `name` resolves to in `fs`, trying the full
-    path form first, then the leaf basename — or None."""
+    path form first, then the leaf basename, then a basename search
+    across subdirectories — or None.
+
+    Drain 2026-08-12-2130. The literal joins alone only ever found notes
+    at the vault ROOT: a bare `[[solitary]]` whose file lives at
+    `percussion_lab/solitary.md` fell through to the engine-fallback
+    path and silently never entered the closure, so the transpiler
+    emitted a bare `solitary(...)` with no shim and the note died at
+    runtime with `NameError: name 'solitary' is not defined`. The
+    subdir walk below is what makes a bare name mean "this note,
+    wherever it lives in the vault".
+
+    Raises `_AmbiguousBareName` when the subdir walk finds more than one
+    file with that basename. Deliberately NOT a silent first-match pick:
+    a silent pick is the exact failure class this drain came from, and
+    scan order is not something an author can reason about.
+    """
     candidates = [name]
     leaf = _leaf_basename(name)
     if leaf != name:
@@ -187,7 +222,25 @@ def build_vault_note_closure(
           return note_id
       except (NoteIdInvalid, VaultFSError):
         continue
-    return None
+
+    # Literal lookups missed. Search subdirectories by basename.
+    # Only for bare names: a caller who wrote `a/b` asked for that exact
+    # path, and quietly resolving it to `c/b` would be a different bug.
+    if "/" in name:
+      return None
+    matches: list[str] = []
+    for path in sorted(fs.root.rglob(f"{name}.md")):
+      if not path.is_file():
+        continue
+      rel = path.relative_to(fs.root).with_suffix("").as_posix()
+      try:
+        fs.note_path(rel)          # re-validate: skips traversal / bad shapes
+      except (NoteIdInvalid, VaultFSError):
+        continue
+      matches.append(rel)
+    if len(matches) > 1:
+      raise _AmbiguousBareName(name, matches)
+    return matches[0] if matches else None
 
   def _fs_for(vault_key: str | None) -> VaultFS:
     return vault_fs if vault_key is None else import_roots[vault_key]
@@ -271,7 +324,15 @@ def build_vault_note_closure(
 
     def exists(source_vault: str | None, note_id: str) -> bool:
       fs = frame_fs if source_vault is None else frame_imports[source_vault]
-      return _find_note_id(fs, note_id) is not None
+      try:
+        return _find_note_id(fs, note_id) is not None
+      except _AmbiguousBareName:
+        # The vault DOES claim this name — ambiguously. Answer True so
+        # resolution targets this vault (local-wins precedence still
+        # applies) and the ambiguity surfaces as a real error below,
+        # rather than falling through to the engine-fallback path and
+        # reappearing later as an opaque NameError.
+        return True
 
     outcome = resolve_link(
       wire,
@@ -299,7 +360,16 @@ def build_vault_note_closure(
     else:
       target_key = outcome.source_vault
       target_fs = frame_imports[outcome.source_vault]
-    note_id = _find_note_id(target_fs, outcome.ref.note_id)
+    try:
+      note_id = _find_note_id(target_fs, outcome.ref.note_id)
+    except _AmbiguousBareName as exc:
+      collected.append(ClosureResolutionError(
+        origin_note=origin,
+        wikilink=wire,
+        reason="ambiguous_bare_name",
+        message=f"{origin}: {exc}",
+      ))
+      return
     if note_id is None:
       return  # Raced away post-resolve; treat as engine fallback.
     _visit_resolved(target_key, note_id, origin, on_path, depth)

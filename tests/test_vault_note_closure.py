@@ -241,3 +241,66 @@ def test_drain_0710_namespaced_and_bare_are_distinct():
 
 def test_drain_0710_dedupe_still_applies_per_qualified_name():
   assert extract_wikilinks("[[a:x]] [[a:x]] [[x]]") == ["a:x", "x"]
+
+
+# ---------------------------------------------------------------------------
+# Bare-name resolution across subdirectories
+# (drain 2026-08-12-2130 — wizard hit `NameError: name 'solitary' is not
+# defined` on `Call [[solitary]]` where the note lives at
+# `percussion_lab/solitary.md`, not at vault root.)
+# ---------------------------------------------------------------------------
+
+
+def test_closure_bare_name_resolves_note_in_subdir(vault: VaultFS):
+  """`[[b]]` resolves when `b.md` lives at `sub/b.md`, not vault root.
+
+  The reported bug: `_find_note_id` only tried a literal root-level join,
+  so a bare wikilink to any note outside the vault root silently fell
+  through to the engine-fallback path and never entered the closure —
+  producing a NameError at runtime, because the transpiler renders bare
+  Calls as a direct `b(...)` with no runtime fallback.
+  """
+  _action_note(vault, "a", "Return Call [[b]].")
+  _action_note(vault, "sub/b", "Return 42.")
+  result = build_vault_note_closure("Return Call [[a]].", vault)
+  names = [e["name"] for e in result]
+  assert "b" in names, f"bare [[b]] did not resolve to sub/b.md; got {names}"
+  assert names == ["b", "a"], "leaf before root ordering should hold"
+
+
+def test_closure_bare_name_subdir_ambiguity_is_an_error(vault: VaultFS):
+  """Two notes sharing a basename in different subdirs → collected error.
+
+  Explicitly NOT a silent first-match pick: a silent pick is the failure
+  class this whole investigation was spent on.
+  """
+  _action_note(vault, "one/dup", "Return 1.")
+  _action_note(vault, "two/dup", "Return 2.")
+  errors: list = []
+  build_vault_note_closure("Return Call [[dup]].", vault, errors=errors)
+  assert errors, "ambiguous bare name should produce a ClosureResolutionError"
+  msg = errors[0].message
+  assert "one/dup" in msg and "two/dup" in msg, (
+    f"error must name both candidate paths so the author can qualify; got {msg!r}"
+  )
+
+
+def test_closure_bare_name_local_subdir_beats_imported(tmp_path: Path):
+  """Local vault note (any subdir) wins over a same-basename import."""
+  local_root = tmp_path / "local"
+  local_root.mkdir()
+  local = VaultFS(root=local_root)
+  imported_root = tmp_path / "imported"
+  imported_root.mkdir()
+  imported = VaultFS(root=imported_root)
+
+  _action_note(local, "sub/shared", 'Return "local".')
+  _action_note(imported, "shared", 'Return "imported".')
+
+  result = build_vault_note_closure(
+    "Return Call [[shared]].", local, imports={"other": imported},
+  )
+  assert len(result) == 1
+  assert '"local"' in result[0]["recipe_source"], (
+    "local-vault match must win; imported vault only when no local match"
+  )
