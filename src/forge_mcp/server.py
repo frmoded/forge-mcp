@@ -44,9 +44,11 @@ from .tools import (
   create_directory,
   create_markdown_note,
   create_note,
+  delete_directory,
   delete_note,
   edit_markdown_note,
   get_run_result,
+  list_directory,
   list_vaults,
   read_messages,
   read_note,
@@ -378,6 +380,50 @@ def _make_server(
     if vault is not None:
       args["vault"] = vault
     result = await create_directory.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=list_directory.TOOL_NAME,
+    description=list_directory.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_list_directory(
+    ctx: Context,
+    path: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"path": path}
+    if vault is not None:
+      args["vault"] = vault
+    result = await list_directory.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=delete_directory.TOOL_NAME,
+    description=delete_directory.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_delete_directory(
+    ctx: Context,
+    path: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"path": path}
+    if vault is not None:
+      args["vault"] = vault
+    result = await delete_directory.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)

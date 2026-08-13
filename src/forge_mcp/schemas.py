@@ -386,6 +386,48 @@ class CreateDirectoryResult(BaseModel):
   absolute_path: str = Field(..., description="Absolute filesystem path.")
 
 
+class DirectoryFileEntry(BaseModel):
+  """One non-directory entry returned by forge_list_directory."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  name: str = Field(..., description="File name including extension.")
+  extension: str = Field(..., description="Suffix including the dot, or '' if none.")
+  is_note: bool = Field(..., description="True for `.md` files (Recipe notes).")
+  size: int = Field(..., description="Size in bytes.")
+
+
+class ListDirectoryResult(BaseModel):
+  """Result envelope for forge_list_directory.
+
+  `exists` is the field that separates an empty directory (`exists=True`,
+  empty lists) from a missing one (`exists=False`) — the ambiguity that
+  motivated drain 2026-08-14-0100.
+  """
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault name the listing came from.")
+  path: str = Field(..., description="Vault-relative path that was listed.")
+  exists: bool = Field(..., description="Whether the directory exists.")
+  files: list[DirectoryFileEntry] = Field(
+    default_factory=list, description="Files directly inside, sorted by name."
+  )
+  directories: list[str] = Field(
+    default_factory=list, description="Subdirectory names, sorted."
+  )
+
+
+class DeleteDirectoryResult(BaseModel):
+  """Result envelope for forge_delete_directory."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault name the directory was removed from.")
+  path: str = Field(..., description="Vault-relative path of the directory.")
+  deleted: bool = Field(..., description="True only if the directory was removed.")
+
+
 class CreateNoteResult(BaseModel):
   """Result envelope for forge_create_note."""
 

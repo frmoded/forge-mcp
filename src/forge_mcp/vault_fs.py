@@ -78,6 +78,22 @@ class DirInvalid(VaultFSError):
   """mkdir was asked to create an invalid path (traversal / hidden / …)."""
 
 
+class DirNotFound(VaultFSError):
+  """listdir/rmdir was pointed at a path that doesn't exist.
+
+  Distinct from an empty directory on purpose (drain 2026-08-14-0100):
+  wizard could not tell "empty" from "nonexistent", so the two states must
+  never collapse into the same reply.
+  """
+
+
+class DirNotEmpty(VaultFSError):
+  """rmdir was asked to remove a directory that still has contents.
+
+  Non-empty deletion is deliberately unsupported — see the tool docstring.
+  """
+
+
 class VersionConflict(VaultFSError):
   """Caller's `expected_version` didn't match the note's current version.
 
@@ -916,6 +932,76 @@ class VaultFS:
         f"directory path {path!r} resolves outside vault root {self.root}"
       ) from exc
     candidate.mkdir(parents=True, exist_ok=True)
+    return candidate
+
+  def _resolve_dir(self, path: str) -> Path:
+    """Validate + resolve a vault-relative directory path.
+
+    Same defense as `mkdir`: `_validate_dir_path` then a resolve +
+    `relative_to` symlink-escape check. Factored out so listdir/rmdir
+    cannot drift from mkdir's rules (drain 2026-08-14-0100).
+    """
+    _validate_dir_path(path)
+    rel = path.rstrip("/")
+    candidate = (self.root / rel).resolve()
+    try:
+      candidate.relative_to(self.root)
+    except ValueError as exc:
+      raise DirInvalid(
+        f"directory path {path!r} resolves outside vault root {self.root}"
+      ) from exc
+    return candidate
+
+  def listdir(self, path: str) -> dict:
+    """List one directory level inside the vault.
+
+    Returns `{"files": [{"name", "extension", "is_note", "size"}, …],
+    "directories": [name, …]}`, both sorted by name. NOT recursive.
+
+    Raises `DirNotFound` if the path doesn't exist or isn't a directory —
+    an existing-but-empty directory returns empty lists instead, so the
+    caller can tell the two apart.
+    """
+    candidate = self._resolve_dir(path)
+    if not candidate.is_dir():
+      raise DirNotFound(f"directory {path!r} does not exist in this vault")
+
+    files: list[dict] = []
+    directories: list[str] = []
+    for entry in candidate.iterdir():
+      if entry.is_dir():
+        directories.append(entry.name)
+        continue
+      suffix = entry.suffix
+      files.append(
+        {
+          "name": entry.name,
+          "extension": suffix,
+          "is_note": suffix == ".md",
+          "size": entry.stat().st_size,
+        }
+      )
+    files.sort(key=lambda f: f["name"])
+    directories.sort()
+    return {"files": files, "directories": directories}
+
+  def rmdir(self, path: str) -> Path:
+    """Remove an EMPTY directory inside the vault.
+
+    Raises `DirNotFound` if it doesn't exist, `DirNotEmpty` if it holds
+    anything at all — any entry counts, not just `.md` notes. Never
+    deletes contents; non-empty removal is out of scope by design.
+
+    Returns the absolute path removed.
+    """
+    candidate = self._resolve_dir(path)
+    if not candidate.is_dir():
+      raise DirNotFound(f"directory {path!r} does not exist in this vault")
+    if candidate == self.root:
+      raise DirInvalid("refusing to remove the vault root itself")
+    if any(candidate.iterdir()):
+      raise DirNotEmpty(f"directory {path!r} is not empty")
+    candidate.rmdir()
     return candidate
 
   def create_note_shell(self, note_id: str, description: str = "") -> Path:
