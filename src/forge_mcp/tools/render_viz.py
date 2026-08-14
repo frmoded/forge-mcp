@@ -59,6 +59,7 @@ _ALLOWED_KINDS = (
   "wave_packet",
   "piano_keyboard",
   "harmonic_stack",
+  "guitar_fretboard",
 )
 _SEGMENT_RE = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\- ]*$")
 
@@ -84,7 +85,10 @@ INPUT_SCHEMA: dict[str, Any] = {
         "envelope (freq, cycles, envelope_center, envelope_width). "
         "piano_keyboard = keyboard segment (range, highlight, labels). "
         "harmonic_stack = stacked partials (fundamental, harmonics, "
-        "amplitudes)."
+        "amplitudes). guitar_fretboard = standard-tuning EADGBE fretboard, "
+        "nut on the left (frets, highlight) — a highlighted pitch is marked "
+        "at EVERY position it occurs, since a fretboard reaches most "
+        "pitches on more than one string."
       ),
     },
     "params": {
