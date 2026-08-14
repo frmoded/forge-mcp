@@ -414,6 +414,20 @@ class CopyAssetResult(BaseModel):
   )
 
 
+class CreateAssetResult(BaseModel):
+  """Result envelope for forge_create_asset."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault the asset was created in.")
+  dest_path: str = Field(..., description="Vault-relative path written.")
+  created: bool = Field(..., description="True only if the asset was written.")
+  bytes_written: int = Field(default=0, description="Size of the new file in bytes.")
+  staged: bool = Field(
+    ..., description="True if the new file was `git add`ed (tracked vaults)."
+  )
+
+
 class DirectoryFileEntry(BaseModel):
   """One non-directory entry returned by forge_list_directory."""
 

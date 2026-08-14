@@ -1356,6 +1356,50 @@ class VaultFS:
       return dst, True
     return dst, False
 
+  def create_asset(
+    self, dest_path: str, data: bytes,
+  ) -> tuple[Path, bool]:
+    """Write NEW caller-supplied bytes to a vault-relative asset path.
+
+    Drain 2026-08-14-0330. `move_asset`/`copy_asset` relocate files that
+    already exist and `save_image_from_url` needs a URL; nothing could
+    write hand-authored content (e.g. a drafted SVG) to an asset path.
+
+    `dest_path` resolves through the same `asset_path()` used by
+    move/copy/delete, so it inherits the identical traversal check,
+    symlink-escape check and extension allowlist — this is deliberately
+    NOT a write-any-file primitive.
+
+    Refuses to overwrite: raises `NoteExists` if the destination is
+    taken. No force flag by design.
+
+    Decoding is the caller's concern — this takes bytes. Staged with
+    `git add` on tracked vaults but NOT committed, matching `copy_asset`:
+    a new file is not half of an atomic pair, so when to commit is the
+    caller's call.
+
+    Returns (dest_path, staged).
+    """
+    dst = self.asset_path(dest_path)
+    if dst.exists():
+      raise NoteExists(dest_path, dst)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    dst.write_bytes(data)
+    if _is_git_tracked(self.root):
+      rel_new = dst.relative_to(self.root)
+      try:
+        subprocess.run(
+          ["git", "-C", str(self.root), "add", "--", str(rel_new)],
+          capture_output=True, text=True, check=True,
+        )
+      except subprocess.CalledProcessError as exc:
+        raise VaultFSError(
+          f"git add failed for {dest_path!r} after create: "
+          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
+        ) from exc
+      return dst, True
+    return dst, False
+
   def delete_note(
     self, note_id: str, message: str | None = None, *, is_asset: bool = False,
   ) -> tuple[Path, str | None, str | None]:

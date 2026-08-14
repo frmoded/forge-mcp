@@ -42,6 +42,7 @@ from .tools import (
   commit_recipe,
   compile_recipe,
   copy_asset,
+  create_asset,
   create_directory,
   create_markdown_note,
   create_note,
@@ -472,6 +473,34 @@ def _make_server(
     if vault is not None:
       args["vault"] = vault
     result = await copy_asset.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=create_asset.TOOL_NAME,
+    description=create_asset.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_create_asset(
+    ctx: Context,
+    content: str,
+    dest_path: str,
+    content_encoding: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {
+      "content": content,
+      "dest_path": dest_path,
+      "content_encoding": content_encoding,
+    }
+    if vault is not None:
+      args["vault"] = vault
+    result = await create_asset.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)
