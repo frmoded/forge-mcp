@@ -386,6 +386,34 @@ class CreateDirectoryResult(BaseModel):
   absolute_path: str = Field(..., description="Absolute filesystem path.")
 
 
+class MoveAssetResult(BaseModel):
+  """Result envelope for forge_move_asset."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault the asset was moved within.")
+  source_path: str = Field(..., description="Vault-relative path moved from.")
+  dest_path: str = Field(..., description="Vault-relative path moved to.")
+  moved: bool = Field(..., description="True only if the asset was moved.")
+  git_sha: str | None = Field(
+    default=None, description="Commit SHA if the move was committed, else null."
+  )
+
+
+class CopyAssetResult(BaseModel):
+  """Result envelope for forge_copy_asset."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault the asset was copied within.")
+  source_path: str = Field(..., description="Vault-relative path copied from.")
+  dest_path: str = Field(..., description="Vault-relative path copied to.")
+  copied: bool = Field(..., description="True only if the asset was copied.")
+  staged: bool = Field(
+    ..., description="True if the new file was `git add`ed (tracked vaults)."
+  )
+
+
 class DirectoryFileEntry(BaseModel):
   """One non-directory entry returned by forge_list_directory."""
 

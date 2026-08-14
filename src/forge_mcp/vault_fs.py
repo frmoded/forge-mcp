@@ -35,6 +35,7 @@ overkill for the splice.
 from __future__ import annotations
 
 import re
+import shutil
 import subprocess
 from dataclasses import dataclass, field
 
@@ -1155,6 +1156,46 @@ class VaultFS:
       raise NoteNotFound(f"note {old_note_id!r} not found at {old_path}")
     if new_path.exists():
       raise NoteExists(new_note_id, new_path)
+    rel_old = old_path.relative_to(self.root)
+    rel_new = new_path.relative_to(self.root)
+    return self._git_aware_move(
+      old_path,
+      new_path,
+      message=message,
+      default_message=f"rename note {_stem(rel_old)} → {_stem(rel_new)}",
+      label=f"{old_note_id!r} → {new_note_id!r}",
+    )
+
+  def _git_aware_move(
+    self,
+    old_path: Path,
+    new_path: Path,
+    *,
+    message: str | None,
+    default_message: str,
+    label: str,
+  ) -> tuple[Path, str | None, str | None]:
+    """Move a file within the vault, preserving git history when possible.
+
+    Extracted from `rename_note` by drain 2026-08-14-0250 so
+    `move_asset` reuses this logic instead of growing a second copy of
+    it. The subtleties below were each paid for by an earlier drain and
+    are easy to reimplement subtly wrong:
+
+      - `git ls-tree HEAD` decides whether HEAD tracks the source. If it
+        does not (uncommitted / just-added), `git mv` behaves no
+        differently from `Path.rename()`, so we take the plain path.
+      - If HEAD does track it, unstaged working-tree drift is reset
+        first, else `git mv` silently promotes that dirty content into
+        the move target.
+      - The commit is path-scoped to the two paths so unrelated staged
+        changes are not swept in.
+
+    Callers are responsible for validating both paths and for rejecting
+    a missing source / existing destination BEFORE calling.
+
+    Returns (new_path, git_sha_or_None, commit_message_or_None).
+    """
     new_path.parent.mkdir(parents=True, exist_ok=True)
     if _is_git_tracked(self.root):
       rel_old = old_path.relative_to(self.root)
@@ -1188,7 +1229,7 @@ class VaultFS:
         )
       except subprocess.CalledProcessError as exc:
         raise VaultFSError(
-          f"git checkout HEAD failed for {old_note_id!r} (pre-rename reset): "
+          f"git checkout HEAD failed for {label} (pre-move reset): "
           f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
         ) from exc
       try:
@@ -1198,15 +1239,13 @@ class VaultFS:
         )
       except subprocess.CalledProcessError as exc:
         raise VaultFSError(
-          f"git mv failed for {old_note_id!r} → {new_note_id!r}: "
+          f"git mv failed for {label}: "
           f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
         ) from exc
-      # Auto-commit the rename (drain 2026-07-24-1500). Path-scoped so
+      # Auto-commit the move (drain 2026-07-24-1500). Path-scoped so
       # unrelated staged changes are NOT swept in. Both old and new rels
       # are named so git commits the deletion + addition atomically.
-      commit_message = message or (
-        f"rename note {_stem(rel_old)} → {_stem(rel_new)}"
-      )
+      commit_message = message or default_message
       git_sha = _git_commit_paths(
         self.root, [rel_old, rel_new], commit_message,
       )
@@ -1214,6 +1253,85 @@ class VaultFS:
     else:
       old_path.rename(new_path)
     return new_path, None, None
+
+  # -- Asset relocation (drain 2026-08-14-0250) -----------------------------
+
+  def _resolve_asset_pair(self, source_path: str, dest_path: str) -> tuple[Path, Path]:
+    """Validate + resolve both ends of an asset move/copy.
+
+    Both go through `asset_path`, so source and destination get the
+    identical traversal, symlink-escape and extension-allowlist defense
+    — no second ad hoc check (drain §4.4). The allowlist matters here as
+    much as it does for delete: without it these tools would be a
+    move-any-file-in-the-vault primitive reaching `.py` / `.toml` / `.sh`.
+
+    Raises NoteIdInvalid for either end, NoteNotFound if the source is
+    missing, NoteExists if the destination is taken. Validation happens
+    BEFORE any filesystem mutation, so a rejected call changes nothing.
+    """
+    src = self.asset_path(source_path)
+    dst = self.asset_path(dest_path)
+    if not src.is_file():
+      raise NoteNotFound(f"asset {source_path!r} not found at {src}")
+    if dst.exists():
+      raise NoteExists(dest_path, dst)
+    return src, dst
+
+  def move_asset(
+    self, source_path: str, dest_path: str, message: str | None = None,
+  ) -> tuple[Path, str | None, str | None]:
+    """Move a binary asset within the vault, git-mv-aware.
+
+    Delegates to the same `_git_aware_move` that backs `rename_note`, so
+    history preservation and dirty-working-tree handling behave
+    identically for assets and notes.
+
+    Parent directories of the destination are created as needed — see
+    the tool docstring for why that is the default.
+
+    Returns (new_path, git_sha_or_None, commit_message_or_None).
+    """
+    src, dst = self._resolve_asset_pair(source_path, dest_path)
+    return self._git_aware_move(
+      src,
+      dst,
+      message=message,
+      default_message=f"move asset {source_path} → {dest_path}",
+      label=f"{source_path!r} → {dest_path!r}",
+    )
+
+  def copy_asset(
+    self, source_path: str, dest_path: str,
+  ) -> tuple[Path, bool]:
+    """Copy a binary asset within the vault.
+
+    Copy is not a native git operation the way `mv` is, so this is a
+    filesystem copy followed by `git add` of the destination when the
+    vault is tracked. Deliberately NOT auto-committed: a copy leaves the
+    source in place, so there is no atomic delete+add pair that has to
+    land together the way a move's does. Staging it makes the new file
+    visible to the next commit without deciding on the caller's behalf
+    when that commit happens.
+
+    Returns (dest_path, staged) where `staged` is True iff `git add` ran.
+    """
+    src, dst = self._resolve_asset_pair(source_path, dest_path)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(src, dst)
+    if _is_git_tracked(self.root):
+      rel_new = dst.relative_to(self.root)
+      try:
+        subprocess.run(
+          ["git", "-C", str(self.root), "add", "--", str(rel_new)],
+          capture_output=True, text=True, check=True,
+        )
+      except subprocess.CalledProcessError as exc:
+        raise VaultFSError(
+          f"git add failed for {dest_path!r} after copy: "
+          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
+        ) from exc
+      return dst, True
+    return dst, False
 
   def delete_note(
     self, note_id: str, message: str | None = None, *, is_asset: bool = False,

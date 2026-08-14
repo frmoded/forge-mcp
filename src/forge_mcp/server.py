@@ -41,6 +41,7 @@ from .resources.recipe_uri import read_recipe_resource
 from .tools import (
   commit_recipe,
   compile_recipe,
+  copy_asset,
   create_directory,
   create_markdown_note,
   create_note,
@@ -50,6 +51,7 @@ from .tools import (
   get_run_result,
   list_directory,
   list_vaults,
+  move_asset,
   read_messages,
   read_note,
   read_note_catalog,
@@ -424,6 +426,52 @@ def _make_server(
     if vault is not None:
       args["vault"] = vault
     result = await delete_directory.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=move_asset.TOOL_NAME,
+    description=move_asset.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_move_asset(
+    ctx: Context,
+    source_path: str,
+    dest_path: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"source_path": source_path, "dest_path": dest_path}
+    if vault is not None:
+      args["vault"] = vault
+    result = await move_asset.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=copy_asset.TOOL_NAME,
+    description=copy_asset.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_copy_asset(
+    ctx: Context,
+    source_path: str,
+    dest_path: str,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {"source_path": source_path, "dest_path": dest_path}
+    if vault is not None:
+      args["vault"] = vault
+    result = await copy_asset.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)
