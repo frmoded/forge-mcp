@@ -713,6 +713,7 @@ def _make_server(
     format: str | None = None,
     tempo_bpm: int | None = None,
     duration_quarters: float | None = None,
+    simultaneous: bool | None = None,
     overwrite: bool | None = None,
     max_size_mb: float | None = None,
   ) -> CallToolResult:

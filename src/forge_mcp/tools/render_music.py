@@ -100,6 +100,16 @@ INPUT_SCHEMA: dict[str, Any] = {
       "type": "number",
       "description": "Duration per pitch in quarter notes. Default 1.0.",
     },
+    "simultaneous": {
+      "type": "boolean",
+      "description": (
+        "Render all pitches as ONE chord (single onset, stacked) instead "
+        "of the default melodic sequence. Use for intervals and chords — "
+        "e.g. demonstrating consonance vs dissonance, where the pitches "
+        "must sound together. `duration_quarters` then applies to the "
+        "whole chord. Default false (sequential)."
+      ),
+    },
     "overwrite": {
       "type": "boolean",
       "description": "If false (default), refuse when target_path already exists.",
@@ -130,7 +140,11 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 
 DESCRIPTION = (
   "Render a music21 pitch list to an audio/notation file and save it "
-  "into a vault at target_path. Supports format='midi' (system-player "
+  "into a vault at target_path. Pitches render melodically (one after "
+  "another) by default; pass simultaneous=true to render them as a "
+  "single chord instead — use that for intervals and chords, e.g. "
+  "demonstrating consonance vs dissonance, where the pitches must "
+  "sound together. Supports format='midi' (system-player "
   "audio, via music21 MIDI writer), format='svg' (staff notation, via "
   "music21 ConverterLilypond shelling to the `lilypond` binary on the "
   "forge-transpile host), and format='mp3' (inline-playable audio, "
@@ -210,6 +224,9 @@ async def run(
   tempo_bpm = arguments.get("tempo_bpm", 90)
   duration_quarters = arguments.get("duration_quarters", 1.0)
   overwrite = bool(arguments.get("overwrite", False))
+  # Drain 2026-08-14-0380 — render all pitches as one chord instead of a
+  # melodic sequence. Coerced the same way as `overwrite` above.
+  simultaneous = bool(arguments.get("simultaneous", False))
   max_size_mb_raw = arguments.get("max_size_mb", _DEFAULT_MAX_SIZE_MB)
 
   # Argument validation.
@@ -282,6 +299,7 @@ async def run(
       "format": fmt,
       "tempo_bpm": tempo_bpm,
       "duration_quarters": duration_quarters,
+      "simultaneous": simultaneous,
     }
     try:
       resp = await http_client.post(
