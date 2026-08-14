@@ -649,6 +649,8 @@ def _make_server(
     ctx: Context,
     note_id: str,
     vault: str | None = None,
+    offset: int | None = None,
+    limit: int | None = None,
   ) -> CallToolResult:
     try:
       bearer = _bearer_from_context(ctx)
@@ -657,6 +659,10 @@ def _make_server(
     args: dict[str, Any] = {"note_id": note_id}
     if vault is not None:
       args["vault"] = vault
+    if offset is not None:
+      args["offset"] = offset
+    if limit is not None:
+      args["limit"] = limit
     result = await read_note.run(
       arguments=args, bearer=bearer, vault_registry=registry,
     )

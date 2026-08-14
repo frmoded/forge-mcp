@@ -39,6 +39,25 @@ INPUT_SCHEMA: dict[str, Any] = {
         "the first-registered vault."
       ),
     },
+    "offset": {
+      "type": "integer",
+      "minimum": 0,
+      "description": (
+        "Character offset into the note's RAW markdown to start from. "
+        "Default 0. Use with `limit` to read a large note in pieces when "
+        "the whole thing exceeds your client's response size cap."
+      ),
+    },
+    "limit": {
+      "type": "integer",
+      "minimum": 1,
+      "description": (
+        "Maximum number of RAW characters to return, starting at "
+        "`offset`. Omit for everything from `offset` to the end. The "
+        "response's `truncated` and `total_length` say whether more "
+        "remains and how much there is in total."
+      ),
+    },
   },
 }
 
@@ -59,6 +78,8 @@ OUTPUT_SCHEMA: dict[str, Any] = {
         "data": {"type": ["string", "null"]},
         "inputs": {"type": "array", "items": {"type": "string"}},
         "raw": {"type": "string"},
+        "truncated": {"type": "boolean"},
+        "total_length": {"type": "integer"},
         "type": {"type": "string", "enum": ["action", "data", "vanilla"]},
       },
     }
@@ -71,7 +92,15 @@ DESCRIPTION = (
   "Data) + declared inputs + the verbatim markdown source. Use this "
   "to fetch an existing note as a template for composition. "
   "Complements forge_read_notes_in_vault (list) and "
-  "forge_read_note_catalog (engine library)."
+  "forge_read_note_catalog (engine library). "
+  "For a note too large for your client's response cap, read it in "
+  "pieces with `offset` + `limit` (character-based) and follow the "
+  "`truncated` / `total_length` fields in the reply. NOTE THE "
+  "ASYMMETRY: offset/limit slice the `raw` markdown ONLY. The derived "
+  "fields (frontmatter, description, recipe, python, data, inputs) are "
+  "always returned in full from the complete note, because parsing them "
+  "out of a partial slice would produce a structurally invalid note — "
+  "and they are small relative to the raw body that overflows the cap."
 )
 
 
@@ -99,6 +128,8 @@ def _error(
         "data": None,
         "inputs": [],
         "raw": "",
+        "truncated": False,
+        "total_length": 0,
         "type": "vanilla",
       },
     },
@@ -112,6 +143,28 @@ async def run(
 ) -> dict[str, Any]:
   note_id = arguments.get("note_id")
   vault_name = arguments.get("vault")
+  # Drain 2026-08-14-2120 — optional chunked read. Validated up front so a
+  # bad window fails before any filesystem work.
+  offset = arguments.get("offset", 0)
+  limit = arguments.get("limit")
+  if offset is None:
+    offset = 0
+  if not isinstance(offset, int) or isinstance(offset, bool) or offset < 0:
+    return _error(
+      f"Invalid 'offset': {offset!r}. Must be a non-negative integer.",
+      "Pass offset=0 (or omit it) to read from the start.",
+      note_id=str(note_id or ""),
+      vault=str(vault_name or ""),
+    )
+  if limit is not None and (
+    not isinstance(limit, int) or isinstance(limit, bool) or limit < 1
+  ):
+    return _error(
+      f"Invalid 'limit': {limit!r}. Must be a positive integer, or omitted.",
+      "Omit limit to read to the end of the note.",
+      note_id=str(note_id or ""),
+      vault=str(vault_name or ""),
+    )
 
   if not isinstance(note_id, str) or not note_id.strip():
     return _error(
@@ -169,6 +222,16 @@ async def run(
   _undeclared = (
     scan_undeclared_inputs(content["recipe"]) if not content["inputs"] else []
   )
+  # Slice the RAW body only. Re-parsing frontmatter from a partial slice
+  # would yield a structurally invalid note, and the derived facets are
+  # small relative to the raw body that blows a client's budget — so they
+  # stay whole. The DESCRIPTION documents this asymmetry.
+  _full_raw = content["raw"] or ""
+  _total_length = len(_full_raw)
+  _end = _total_length if limit is None else min(offset + limit, _total_length)
+  _raw_slice = _full_raw[offset:_end]
+  _truncated = _end < _total_length
+
   note_content = NoteContent(
     note_id=normalized_note_id,
     vault=effective_vault_name,
@@ -180,7 +243,9 @@ async def run(
     inputs=content["inputs"],
     undeclared_inputs_detected=bool(_undeclared),
     undeclared_inputs_summary=", ".join(_undeclared) if _undeclared else None,
-    raw=content["raw"],
+    raw=_raw_slice,
+    truncated=_truncated,
+    total_length=_total_length,
     sync_state=content.get("sync_state"),
     type=content.get("type", "vanilla"),
   )

@@ -634,7 +634,22 @@ class NoteContent(BaseModel):
     ),
   )
   raw: str = Field(
-    ..., description="Full markdown source, verbatim."
+    ...,
+    description=(
+      "Markdown source, verbatim. If `offset`/`limit` were passed to "
+      "forge_read_note this is that slice; otherwise the whole source."
+    ),
+  )
+  truncated: bool = Field(
+    default=False,
+    description=(
+      "True when more raw content follows this slice — request the next "
+      "chunk with offset += len(raw). Drain 2026-08-14-2120."
+    ),
+  )
+  total_length: int = Field(
+    default=0,
+    description="Character length of the FULL raw source, ignoring any slice.",
   )
   sync_state: str | None = Field(
     None,
