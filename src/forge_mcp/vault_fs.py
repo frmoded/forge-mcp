@@ -798,6 +798,29 @@ class VaultFS:
       # is typed `str | None` in schemas.py:134 on purpose — the MCP layer
       # surfaces what producers write rather than constraining it — so this
       # needed no schema change.
+      #
+      # DOCTRINE (drain 2026-08-14-0270) — `sync_state` has TWO independent
+      # writers. Read both before adding a third or changing either:
+      #
+      #   1. THIS function (forge-mcp's commit_recipe). Stamps at commit
+      #      time from whether a Python facet exists: none -> "synced";
+      #      present -> "stale-python", because commit does not
+      #      re-transpile.
+      #   2. The Obsidian plugin's `computeSyncState`
+      #      (forge-client-obsidian/src/facet-hash-core.ts:107-137).
+      #      Recomputes on note open by comparing STORED hashes against
+      #      hashes of the note's CURRENT LIVE TEXT — not against the
+      #      `*_derived_from_*_hash` lineage fields, which only ever
+      #      compare stored-vs-stored values.
+      #
+      # The two SHOULD agree on live notes: same vocabulary, same intent.
+      # But they are separate implementations, in different languages, in
+      # different repos, reached by different triggers (commit vs open),
+      # and neither imports the other — so nothing enforces the agreement.
+      # A third writer that re-derives the vocabulary independently is how
+      # they would quietly stop agreeing. See
+      # prompts/feedback/2026-08-14-0130-*.md for the reasoning behind
+      # this arrangement, and 0270's for why it is written down here.
       _py = self.read_note_content(note_id).get("python")
       _next_state = "stale-python" if (_py or "").strip() else "synced"
       _stamped = _set_frontmatter_key(_stamped, "sync_state", _next_state)
