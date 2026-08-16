@@ -349,6 +349,17 @@ class CommitResult(BaseModel):
   git_sha: str | None = Field(
     None, description="SHA of the git commit for this write; None if the vault isn't git-tracked."
   )
+  git_outcome: str = Field(
+    "not-git-tracked",
+    description=(
+      "Drain 2026-08-16-1810 — WHY git_sha is what it is, since None alone "
+      "is ambiguous. 'committed': a commit was made. 'nothing-to-commit': "
+      "the write landed on disk but another actor's commit already carried "
+      "it — legitimate, not an error. 'git-error: <detail>': git itself "
+      "failed. 'not-git-tracked': the vault has no .git. Quote this field "
+      "when escalating a null git_sha."
+    ),
+  )
 
 
 # -----------------------------------------------------------------------------

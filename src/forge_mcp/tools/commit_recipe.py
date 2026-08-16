@@ -111,6 +111,7 @@ OUTPUT_SCHEMA: dict[str, Any] = {
     "committed_version": {"type": "integer", "minimum": 1},
     "run_id": {"type": "string"},
     "git_sha": {"type": ["string", "null"]},
+    "git_outcome": {"type": "string"},
   },
 }
 
@@ -244,7 +245,7 @@ async def run(
     # vault_fs uses it and appends ` v{new_version}` if not already
     # ending in that suffix — preserves the resource-resolver invariant
     # at `vault_fs.read_recipe_version` (subject.endswith(f'v{n}')).
-    new_version, git_sha = vault_fs.commit_recipe(
+    new_version, git_sha, git_outcome = vault_fs.commit_recipe(
       note_id=note_id,
       new_recipe_body=source,
       expected_version=expected_version,
@@ -267,6 +268,7 @@ async def run(
         "committed_version": exc.current,
         "run_id": "",
         "git_sha": None,
+        "git_outcome": "not-git-tracked",
       },
     )
   except VaultFSError as exc:
@@ -295,6 +297,7 @@ async def run(
     committed_version=new_version,
     run_id=run_id,
     git_sha=git_sha,
+    git_outcome=git_outcome,
   )
   git_hint = f" git={git_sha[:8]}" if git_sha else ""
   return {

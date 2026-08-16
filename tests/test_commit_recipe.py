@@ -235,13 +235,13 @@ class TestVaultFSCommitRecipe:
   def test_increments_version_on_each_commit(self, vault_root: Path):
     """Drain §5 test #2."""
     fs = VaultFS(root=vault_root)
-    v1, _ = fs.commit_recipe(
+    v1, _, _ = fs.commit_recipe(
       note_id="notes/seed",
       new_recipe_body="Return 2.",
       expected_version=0,  # seed has no `recipe_version` stamp yet → 0
     )
     assert v1 == 1
-    v2, _ = fs.commit_recipe(
+    v2, _, _ = fs.commit_recipe(
       note_id="notes/seed",
       new_recipe_body="Return 3.",
       expected_version=1,
@@ -270,7 +270,7 @@ class TestVaultFSCommitRecipe:
   def test_no_git_returns_none_sha(self, vault_root: Path):
     """Non-git vault — commit succeeds, git_sha=None per drain §6."""
     fs = VaultFS(root=vault_root)
-    _, sha = fs.commit_recipe(
+    _, sha, _ = fs.commit_recipe(
       note_id="notes/seed", new_recipe_body="Return 5.", expected_version=None
     )
     assert sha is None
@@ -291,7 +291,7 @@ class TestRecipeUri:
     """Drain §5 test #7."""
     fs = VaultFS(root=git_vault_root)
     # Fresh commit → v2.
-    v2, sha = fs.commit_recipe(
+    v2, sha, _ = fs.commit_recipe(
       note_id="seed", new_recipe_body="Return 22.", expected_version=1
     )
     assert v2 == 2
@@ -473,7 +473,7 @@ class TestCommitMessageParam:
     The ` v{new_version}` suffix is APPENDED (invariant for
     read_recipe_version)."""
     fs = VaultFS(root=git_vault_root)
-    new_version, sha = fs.commit_recipe(
+    new_version, sha, _ = fs.commit_recipe(
       note_id="seed",
       new_recipe_body="Return 42.",
       expected_version=1,
@@ -490,7 +490,7 @@ class TestCommitMessageParam:
     """§5 test #2 — no `message` argument → the drain-1225 auto-generated
     shape `forge-mcp: commit recipe <note_id> v<N>` is used."""
     fs = VaultFS(root=git_vault_root)
-    new_version, _ = fs.commit_recipe(
+    new_version, _, _ = fs.commit_recipe(
       note_id="seed",
       new_recipe_body="Return 100.",
       expected_version=1,
@@ -505,7 +505,7 @@ class TestCommitMessageParam:
     doesn't get a second suffix stapled on. Empirically important for
     idempotent replays."""
     fs = VaultFS(root=git_vault_root)
-    new_version, _ = fs.commit_recipe(
+    new_version, _, _ = fs.commit_recipe(
       note_id="seed",
       new_recipe_body="Return 7.",
       expected_version=1,

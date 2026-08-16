@@ -231,7 +231,7 @@ async def test_stampless_shell_survives_first_commit_recipe(
   # expected_version=0 exercises the CAS path against a stampless
   # note: the concurrency token must still compare correctly when the
   # frontmatter key is absent.
-  new_version, _run_id = vault_fs.commit_recipe(
+  new_version, _run_id, _ = vault_fs.commit_recipe(
     "committed", 'Return "hello".', 0)
   assert new_version == 1
 

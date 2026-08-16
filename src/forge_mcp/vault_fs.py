@@ -37,6 +37,7 @@ from __future__ import annotations
 import re
 import shutil
 import subprocess
+import sys
 from dataclasses import dataclass, field
 
 from .facet_hash import compute_facet_hash
@@ -136,6 +137,19 @@ class AutoCommitResult:
   committed: bool
   foreign_changes_detected: bool = False
   foreign_changes_summary: str | None = None
+  # Drain 2026-08-16-1810 — WHICH thing happened, not just whether a sha
+  # came back. Drain 1710 could not tell an absorbed write (another actor
+  # committed it first) from a real git failure, because both were a bare
+  # `git_sha: None`; that ambiguity turned a five-minute question into an
+  # archaeology expedition after the evidence had gone.
+  #
+  #   "committed"         — we made a commit; `git_sha` holds it.
+  #   "nothing-to-commit" — nothing was staged. The write landed on disk
+  #                         and somebody else's commit already carries it.
+  #                         A legitimate outcome, NOT an error.
+  #   "git-error"         — git itself failed; `error_summary` says how.
+  outcome: str = "committed"
+  error_summary: str | None = None
 
 
 @dataclass
@@ -720,8 +734,11 @@ class VaultFS:
         writing.
       * `expected_version == current` → write + increment.
 
-    Returns `(new_version, git_sha_or_None)`. git_sha is None when
-    the vault has no `.git` (per drain §6 out-of-scope).
+    Returns `(new_version, git_sha_or_None, git_outcome)`. git_sha is
+    None when the vault has no `.git` (per drain §6 out-of-scope) and
+    also when nothing was left to commit or git failed — drain
+    2026-08-16-1810 added `git_outcome` because those three are very
+    different situations that used to look identical to the caller.
 
     New notes (path doesn't exist) create the file with a minimal
     frontmatter + Recipe facet — Description stays empty until the
@@ -828,6 +845,7 @@ class VaultFS:
         _atomic_write(path, _stamped)
 
     git_sha: str | None = None
+    git_outcome = "not-git-tracked"
     if _is_git_tracked(self.root):
       # CW-MCP-commit-message-param: caller-supplied messages must still
       # end with `v{new_version}` so `read_recipe_version` can grep the
@@ -849,9 +867,15 @@ class VaultFS:
       # it out. `_git_commit_file` still absorbs concurrent edits here
       # exactly as it does elsewhere — that is a known gap, not a
       # solved one.
-      git_sha = _git_commit_file(self.root, path, message).git_sha
+      _auto = _git_commit_file(self.root, path, message)
+      git_sha = _auto.git_sha
+      git_outcome = (
+        f"git-error: {_auto.error_summary}"
+        if _auto.outcome == "git-error" and _auto.error_summary
+        else _auto.outcome
+      )
 
-    return new_version, git_sha
+    return new_version, git_sha, git_outcome
 
   # -- Read note content (CW-MCP-read-note) ---------------------------------
 
@@ -1689,6 +1713,24 @@ def _git_staged_blob(root: Path, rel: Path) -> bytes | None:
   return res.stdout if res.returncode == 0 else None
 
 
+def _log_commit_attempt(
+  rel: Path, outcome: str, *, sha: str | None = None, detail: str | None = None
+) -> None:
+  """One line per commit attempt (drain 2026-08-16-1810, §4).
+
+  Drain 1710 went looking for why a commit returned no sha and found ZERO
+  relevant lines in the server log. An attempt that leaves no trace is one
+  nobody can diagnose after the fact, which is the whole failure this drain
+  exists to prevent.
+  """
+  bits = [f"forge-mcp git-commit {rel}: {outcome}"]
+  if sha:
+    bits.append(f"sha={sha[:8]}")
+  if detail:
+    bits.append(f"({detail})")
+  print(" ".join(bits), file=sys.stderr)
+
+
 def _git_commit_file(
   root: Path,
   path: Path,
@@ -1728,6 +1770,22 @@ def _git_commit_file(
       )
       foreign = staged != want
 
+    # Drain 2026-08-16-1810 — is there anything staged for THIS path?
+    # `git diff --cached --quiet` is the clean primitive: exit 0 means no
+    # staged difference, so `git commit` would fail with "nothing to
+    # commit" and we would have no way to tell that from git breaking.
+    # Checked before committing rather than string-matching git's output
+    # afterwards, which varies by version and locale.
+    staged_check = subprocess.run(
+      ["git", "-C", str(root), "diff", "--cached", "--quiet", "--", str(rel)],
+      capture_output=True, text=True,
+    )
+    if staged_check.returncode == 0:
+      _log_commit_attempt(rel, "nothing-to-commit")
+      return AutoCommitResult(
+        git_sha=None, committed=False, outcome="nothing-to-commit",
+      )
+
     subprocess.run(
       ["git", "-C", str(root), "commit", "-m", message, "--", str(rel)],
       capture_output=True, text=True, check=True,
@@ -1748,14 +1806,22 @@ def _git_commit_file(
         f"is simply not the only thing in this commit. "
         f"Inspect: git show {sha} -- {rel}"
       )
+    _log_commit_attempt(rel, "committed", sha=sha)
     return AutoCommitResult(
       git_sha=sha,
       committed=sha is not None,
       foreign_changes_detected=foreign,
       foreign_changes_summary=summary,
+      outcome="committed",
     )
-  except subprocess.CalledProcessError:
-    return AutoCommitResult(git_sha=None, committed=False)
+  except subprocess.CalledProcessError as exc:
+    # Enough to diagnose, not the whole dump (§4).
+    detail = (exc.stderr or exc.stdout or str(exc)).strip().replace("\n", " ")
+    summary = f"git {' '.join(exc.cmd[3:5])} failed: {detail}"[:400]
+    _log_commit_attempt(rel, "git-error", detail=summary)
+    return AutoCommitResult(
+      git_sha=None, committed=False, outcome="git-error", error_summary=summary,
+    )
 
 
 def _stem(rel: Path) -> str:
