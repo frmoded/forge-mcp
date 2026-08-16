@@ -144,8 +144,16 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 }
 
 DESCRIPTION = (
-  "Render a pedagogical diagram (sinewave, wave_packet, piano_keyboard, "
-  "harmonic_stack) to an SVG file in a vault. Sibling to "
+  # Drain 2026-08-16-1110 — every kind in _ALLOWED_KINDS is named here, and
+  # a test enforces that. This string is the discovery surface: an MCP-only
+  # agent cannot read the source, so a kind missing from it does not exist
+  # as far as that agent is concerned. Wizard hand-authored two SVGs that
+  # sinewave_comparison / loudness_comparison would have produced, purely
+  # because this sentence was stale.
+  "Render a pedagogical diagram (sinewave, sinewave_comparison, "
+  "loudness_comparison, wave_packet, piano_keyboard, harmonic_stack, "
+  "guitar_fretboard) to an SVG file in a vault. See the `kind` schema for "
+  "which to reach for. Sibling to "
   "forge_render_music: that one renders pitches to staff notation, this "
   "renders parameters to a physics/notation figure. Embed the result in "
   "a note with ![[<target_path>]]. Refuses to overwrite unless "

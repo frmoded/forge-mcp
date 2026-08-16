@@ -114,3 +114,43 @@ def test_extractor_raises_when_the_assignment_is_gone(tmp_path):
   fake.write_text("SOMETHING_ELSE = ('a', 'b')\n")
   with pytest.raises(AssertionError):
     _viz_kinds_via_ast(fake)
+
+
+# --------------------------------------------- DESCRIPTION drift (drain 1110)
+
+
+def test_description_names_every_allowed_kind():
+  """Drain 2026-08-16-1110 — the tool DESCRIPTION is the discovery surface.
+
+  An MCP-only agent cannot read the source; the description string IS how it
+  learns which kinds exist. Wizard hand-authored nice_wave.svg / ugly_wave.svg
+  via forge_create_asset because the description didn't mention
+  sinewave_comparison or loudness_comparison — real work wasted to a stale
+  string. Containment is enough here: the point is drift-proofing, not prose.
+  """
+  from forge_mcp.tools.render_viz import DESCRIPTION, _ALLOWED_KINDS
+
+  missing = [k for k in _ALLOWED_KINDS if k not in DESCRIPTION]
+  assert not missing, (
+    f"forge_render_viz DESCRIPTION does not name: {missing}. "
+    f"An agent that can only read the description cannot discover them."
+  )
+
+
+def test_schema_enum_description_names_every_allowed_kind():
+  """Same guarantee for the per-kind guidance the schema carries."""
+  from forge_mcp.tools.render_viz import INPUT_SCHEMA, _ALLOWED_KINDS
+
+  text = INPUT_SCHEMA["properties"]["kind"]["description"]
+  missing = [k for k in _ALLOWED_KINDS if k not in text]
+  assert not missing, f"kind schema description does not name: {missing}"
+
+
+def test_description_kind_check_is_not_vacuous():
+  """The check above must fail when a kind is absent — otherwise it only
+  proves the string is non-empty."""
+  from forge_mcp.tools.render_viz import _ALLOWED_KINDS
+
+  pretend_description = "Render a pedagogical diagram (sinewave) to an SVG."
+  missing = [k for k in _ALLOWED_KINDS if k not in pretend_description]
+  assert missing, "a description naming one kind must register the rest as missing"
