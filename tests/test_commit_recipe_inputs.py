@@ -240,3 +240,170 @@ async def test_end_to_end_wizard_workflow_readback(
   assert result["isError"] is False
   inputs = result["structuredContent"]["note"]["inputs"]
   assert inputs == ["guess"]
+
+
+# ---------------------------------------------------------------------
+# Block-form `inputs:` — drain 2026-08-16-2400
+# ---------------------------------------------------------------------
+#
+# Wizard's commit on forge_tutorial/03-functions/mood.md (git_sha
+# 6ec25f2) produced frontmatter that is not valid YAML:
+#
+#     inputs: [style]
+#       - style
+#
+# The rewrite replaced the `inputs:` KEY LINE and left the block
+# sequence's continuation line behind, keyless. The plugin then cannot
+# parse `type: action`, so the note loses its Run button entirely — a
+# successful-looking commit that leaves the note un-runnable.
+#
+# PyYAML is not a forge-mcp dependency and this is not the drain to make
+# it one, so the validity check below is written out: in a frontmatter
+# mapping every line is either a `key:` line or an indented continuation
+# of a key whose own value was EMPTY. An indented line under a key that
+# already carries a value is precisely the corruption.
+
+from forge_mcp.vault_fs import splice_recipe  # noqa: E402
+
+
+def _frontmatter(raw: str) -> str:
+  assert raw.startswith("---\n")
+  return raw[4:raw.index("\n---", 4)]
+
+
+def _parse_frontmatter_mapping(fm_text: str) -> dict[str, object]:
+  """Parse a frontmatter block, refusing anything YAML would refuse."""
+  result: dict[str, object] = {}
+  last_key: str | None = None
+  last_key_had_value = True
+  for lineno, line in enumerate(fm_text.split("\n"), start=1):
+    if not line.strip():
+      continue
+    if line[0] in " \t":
+      if last_key is None:
+        raise AssertionError(f"line {lineno}: indented line with no key above: {line!r}")
+      if last_key_had_value:
+        raise AssertionError(
+          f"line {lineno}: {line!r} continues {last_key!r}, which already has "
+          f"a value — keyless continuation, not valid YAML"
+        )
+      item = line.strip()
+      if not item.startswith("- "):
+        raise AssertionError(f"line {lineno}: unsupported continuation {line!r}")
+      result.setdefault(last_key, []).append(item[2:].strip())  # type: ignore[union-attr]
+      continue
+    if ":" not in line:
+      raise AssertionError(f"line {lineno}: not a mapping entry: {line!r}")
+    key, _, value = line.partition(":")
+    last_key, value = key.strip(), value.strip()
+    last_key_had_value = bool(value)
+    if value.startswith("[") and value.endswith("]"):
+      inner = value[1:-1].strip()
+      result[last_key] = [v.strip() for v in inner.split(",")] if inner else []
+    elif value:
+      result[last_key] = value
+    else:
+      result[last_key] = []
+  return result
+
+
+_BLOCK_FORM_NOTE = """---
+type: action
+inputs:
+  - style
+source_facet: description
+sync_state: stale-python
+recipe_version: 1
+---
+
+# Description
+
+Pick a style.
+
+# Recipe
+
+Input style: str = "cheerful".
+Return style.
+"""
+
+
+def test_the_validity_checker_actually_rejects_wizards_corruption():
+  """Non-vacuity for the checker itself: feed it the exact bytes wizard
+  found on disk and confirm it objects."""
+  with pytest.raises(AssertionError, match="keyless continuation"):
+    _parse_frontmatter_mapping(
+      "type: action\ninputs: [style]\n  - style\nsource_facet: description"
+    )
+
+
+def test_block_form_inputs_rewrite_leaves_valid_yaml():
+  """Wizard's exact repro. The dangling `  - style` is the bug."""
+  out = splice_recipe(
+    _BLOCK_FORM_NOTE, 'Input style: str = "formal".\nReturn style.\n', 2,
+    inputs=["style"],
+  )
+  fm_text = _frontmatter(out)
+  fm = _parse_frontmatter_mapping(fm_text)
+
+  assert fm["inputs"] == ["style"]
+  assert fm["type"] == "action", (
+    "the plugin's run-button gate reads `type`; unparseable frontmatter "
+    "hides it and the button disappears"
+  )
+  assert "\n  - style" not in fm_text, "block continuation left behind"
+
+
+def test_block_form_multi_item_converts_without_residue():
+  note = _BLOCK_FORM_NOTE.replace(
+    "inputs:\n  - style\n", "inputs:\n  - bars\n  - velocity\n"
+  )
+  out = splice_recipe(note, "Return 1.\n", 2, inputs=["bars", "velocity"])
+  fm_text = _frontmatter(out)
+  fm = _parse_frontmatter_mapping(fm_text)
+
+  assert fm["inputs"] == ["bars", "velocity"]
+  assert "  - bars" not in fm_text and "  - velocity" not in fm_text
+  # The keys that followed the block must survive, in place.
+  assert fm["source_facet"] == "description"
+  assert fm["sync_state"] == "stale-python"
+
+
+def test_flow_form_rewrite_is_unchanged():
+  """Regression guard: the path that was already working."""
+  note = _BLOCK_FORM_NOTE.replace("inputs:\n  - style\n", "inputs: [style]\n")
+  out = splice_recipe(note, "Return 1.\n", 2, inputs=["style", "mood"])
+  fm = _parse_frontmatter_mapping(_frontmatter(out))
+
+  assert fm["inputs"] == ["style", "mood"]
+  assert fm["type"] == "action"
+
+
+def test_note_without_any_inputs_key_gains_one_cleanly():
+  note = _BLOCK_FORM_NOTE.replace("inputs:\n  - style\n", "")
+  out = splice_recipe(note, "Return 1.\n", 2, inputs=["style"])
+  fm = _parse_frontmatter_mapping(_frontmatter(out))
+
+  assert fm["inputs"] == ["style"]
+  assert fm["type"] == "action"
+
+
+def test_a_key_after_the_block_is_not_swallowed():
+  """The fix must consume the block's OWN continuation lines and stop —
+  not eat whatever follows."""
+  out = splice_recipe(_BLOCK_FORM_NOTE, "Return 1.\n", 2, inputs=["style"])
+  fm = _parse_frontmatter_mapping(_frontmatter(out))
+
+  assert set(fm) == {
+    "type", "inputs", "source_facet", "sync_state", "recipe_version",
+  }
+  assert fm["recipe_version"] == "2"
+
+
+def test_inputs_none_leaves_a_block_form_note_untouched():
+  """Back-compat: callers that pass no inputs must not trigger any of
+  this. The block form stays exactly as authored."""
+  out = splice_recipe(_BLOCK_FORM_NOTE, "Return 1.\n", 2)
+  fm_text = _frontmatter(out)
+
+  assert "inputs:\n  - style" in fm_text
+  _parse_frontmatter_mapping(fm_text)

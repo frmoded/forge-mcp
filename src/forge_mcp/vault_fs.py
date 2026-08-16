@@ -258,6 +258,33 @@ def _render_inputs_yaml(inputs: list[str]) -> str:
   return "[" + ", ".join(parts) + "]"
 
 
+def _drop_block_continuation(lines: list[str], key_index: int) -> list[str]:
+  """Drop the continuation lines belonging to the key at `key_index`.
+
+  Drain 2026-08-16-2400. Both frontmatter writers below replace a key's
+  LINE. That is correct for a scalar and silently corrupting for a block
+  value: rewriting
+
+      inputs:
+        - style
+
+  to `inputs: [style]` leaves `  - style` behind with no key above it,
+  which is not valid YAML. The plugin then cannot read `type: action`
+  and the note loses its Run button — a successful-looking commit that
+  leaves the note un-runnable. Wizard hit exactly this on
+  `forge_tutorial/03-functions/mood.md` (`6ec25f2`).
+
+  A block value's continuation is every immediately-following line that
+  is indented. The first non-indented line (the next key, or a blank
+  line) ends it, so nothing beyond the replaced key's own value is
+  touched.
+  """
+  end = key_index + 1
+  while end < len(lines) and lines[end][:1] in (" ", "\t"):
+    end += 1
+  return lines[: key_index + 1] + lines[end:]
+
+
 def _set_frontmatter_key(text: str, key: str, value: str) -> str:
   """Set `key: value` INSIDE the frontmatter block, inserting if absent.
 
@@ -282,6 +309,7 @@ def _set_frontmatter_key(text: str, key: str, value: str) -> str:
   for i, line in enumerate(lines):
     if line.startswith(f"{key}:"):
       lines[i] = f"{key}: {value}"
+      lines = _drop_block_continuation(lines, i)
       break
   else:
     lines.append(f"{key}: {value}")
@@ -296,6 +324,7 @@ def _update_frontmatter_line(text: str, key: str, value: str) -> str:
   for i, line in enumerate(lines):
     if re.match(rf"^{re.escape(key)}\s*:", line):
       lines[i] = new_line
+      lines = _drop_block_continuation(lines, i)
       return "\n".join(lines) + ("\n" if text.endswith("\n") else "")
   # Not present — append. Keep trailing newline behavior consistent.
   if text and not text.endswith("\n"):
