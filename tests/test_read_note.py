@@ -298,8 +298,11 @@ Return "hi".
 async def test_read_note_returns_sync_state(
   single_vault_registry: VaultRegistry,
 ):
-  """Drain 1700 §5 test #1 — sync_state present in frontmatter surfaces
-  on NoteContent."""
+  """Drain 2026-08-17-0100 (Phase 2) — was: "sync_state present in
+  frontmatter surfaces on NoteContent." It no longer surfaces; it is
+  DERIVED. This fixture stores `stale-recipe` while carrying no hash
+  stamps at all, so the honest answer is `unknown` — a claim with
+  nothing behind it is exactly what the retirement was for."""
   vault_fs = single_vault_registry.get()
   _write(vault_fs.root, "stale_desc", _NOTE_WITH_SYNC_STATE)
   result = await read_note.run(
@@ -309,16 +312,16 @@ async def test_read_note_returns_sync_state(
   )
   assert result["isError"] is False
   note = result["structuredContent"]["note"]
-  assert note["sync_state"] == "stale-recipe"
+  assert note["sync_state"] == "unknown"
 
 
 @pytest.mark.asyncio
 async def test_read_note_missing_sync_state(
   single_vault_registry: VaultRegistry,
 ):
-  """Drain 1700 §5 test #2 — sync_state absent from frontmatter → None
-  on NoteContent. Callers must treat None as 'unknown' and NOT infer
-  'synced'."""
+  """Drain 2026-08-17-0100 (Phase 2) — was: "absent → None; callers must
+  treat None as 'unknown'." The instruction is now the value: absent
+  lineage derives `unknown` and no caller has to remember the rule."""
   vault_fs = single_vault_registry.get()
   _write(vault_fs.root, "pre_drain", _NOTE_WITHOUT_SYNC_STATE)
   result = await read_note.run(
@@ -328,7 +331,7 @@ async def test_read_note_missing_sync_state(
   )
   assert result["isError"] is False
   note = result["structuredContent"]["note"]
-  assert note["sync_state"] is None
+  assert note["sync_state"] == "unknown"
 
 
 # ---------------------------------------------------------------------------

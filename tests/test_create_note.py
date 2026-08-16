@@ -162,7 +162,8 @@ async def test_create_note_shell_writes_v2a_frontmatter(
   empty_hash = compute_facet_hash("")
   for line in (
     "source_facet: description",
-    "sync_state: stale-recipe",
+    # "sync_state: ..." removed by drain 2026-08-17-0100 (Phase 2) —
+    # derived on read, never stamped at creation.
     f"description_hash: {description_hash}",
     f"recipe_hash: {empty_hash}",
     f"python_hash: {empty_hash}",

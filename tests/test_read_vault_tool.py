@@ -283,5 +283,9 @@ class TestListNotesSyncState:
     vault_fs = VaultFS(root=root)
     entries = vault_fs.list_notes()
     by_id = {e["note_id"]: e for e in entries}
-    assert by_id["stale"]["sync_state"] == "stale-recipe"
-    assert by_id["pre_drain"]["sync_state"] is None
+    # Drain 2026-08-17-0100 (Phase 2) — derived, not passed through.
+    # Neither fixture carries a hash stamp, so neither lineage can be
+    # evaluated: `unknown` for both, including the one that stores a
+    # confident `stale-recipe`.
+    assert by_id["stale"]["sync_state"] == "unknown"
+    assert by_id["pre_drain"]["sync_state"] == "unknown"

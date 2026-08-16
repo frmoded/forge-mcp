@@ -40,6 +40,7 @@ import subprocess
 import sys
 from dataclasses import dataclass, field
 
+from ._vendor.sync_state import derive_sync_state
 from .facet_hash import compute_facet_hash
 from pathlib import Path
 
@@ -867,9 +868,11 @@ class VaultFS:
       # they would quietly stop agreeing. See
       # prompts/feedback/2026-08-14-0130-*.md for the reasoning behind
       # this arrangement, and 0270's for why it is written down here.
-      _py = self.read_note_content(note_id).get("python")
-      _next_state = "stale-python" if (_py or "").strip() else "synced"
-      _stamped = _set_frontmatter_key(_stamped, "sync_state", _next_state)
+      # Drain 2026-08-17-0100 (Phase 2) — the `sync_state` stamp that
+      # stood here is GONE. It is derived on read now, so a writer can
+      # only disagree with the readers. Whatever an existing note already
+      # carries is left untouched: Phase 3 strips it, with the
+      # bundled-vault bump gates that removal trips.
       if _stamped != _txt:
         _atomic_write(path, _stamped)
 
@@ -932,10 +935,12 @@ class VaultFS:
     python = facets.get("Python")
     data = facets.get("Data")
     inputs = _extract_inputs(parsed.frontmatter_dict, description)
-    # Drain 2026-07-23-1700 Phase 1 — surface `sync_state` from
-    # frontmatter for external observers (wizard / CC / CCQA / cohort
-    # scripts) that read note state without loading the plugin.
-    sync_state = parsed.frontmatter_dict.get("sync_state")
+    # Drain 2026-08-17-0100 (Phase 2) — DERIVED, never read from the
+    # stored field. The persisted value lied in five documented ways;
+    # the lineage it summarized sits in the same frontmatter, so we
+    # compute it. `derive_sync_state` is the engine's, vendored verbatim
+    # (see `_vendor/__init__.py`) — never reimplemented here.
+    sync_state = derive_sync_state(parsed.frontmatter_dict)
     # Drain 2026-07-26-1200 — surface a discriminated `type` field so
     # callers can distinguish action notes (frontmatter `type: action`)
     # from data notes (`type: data`) from vanilla prose notes (no
@@ -1156,9 +1161,11 @@ class VaultFS:
       # decision to make two files look alike. Nothing observable
       # differs; see this drain's FEEDBACK.
       "source_facet: description\n"
-      # Recipe is empty and therefore not derived from this
-      # Description. `stale-recipe` is the honest opening state.
-      "sync_state: stale-recipe\n"
+      # Drain 2026-08-17-0100 (Phase 2) — no `sync_state` here either.
+      # A fresh shell with a Description and no Recipe derives
+      # `stale-recipe` at read time, which is the same honest opening
+      # state this line used to hardcode — now computed, so it cannot
+      # drift from the note it describes.
       f"description_hash: {description_hash}\n"
       f"recipe_hash: {empty_hash}\n"
       f"python_hash: {empty_hash}\n"
@@ -1610,11 +1617,10 @@ class VaultFS:
             recipe_version = int(stamp)
           except ValueError:
             recipe_version = None
-        # Drain 2026-07-23-1700 Phase 1 — sync_state per note.
-        # str | None; whatever the plugin wrote (or None if absent).
-        raw_sync = parsed.frontmatter_dict.get("sync_state")
-        if isinstance(raw_sync, str):
-          sync_state = raw_sync
+        # Drain 2026-08-17-0100 (Phase 2) — derived, same as
+        # `read_note_content`. Both read surfaces must answer the same
+        # question the same way.
+        sync_state = derive_sync_state(parsed.frontmatter_dict)
         note_type = _classify_note_type(parsed.frontmatter_dict)
       except (OSError, UnicodeDecodeError):
         # Unreadable file (permission, binary content mislabeled as

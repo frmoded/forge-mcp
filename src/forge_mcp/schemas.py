@@ -134,15 +134,18 @@ class VaultNoteEntry(BaseModel):
   sync_state: str | None = Field(
     None,
     description=(
-      "S9 sync_state frontmatter field (drain 2026-07-23-1700 Phase 1). "
-      "Note-level rollup of facet-freshness relationships, populated by "
-      "the plugin on facet-change lifecycle events. Typed as `str | None` "
-      "rather than Literal so the MCP layer surfaces whatever the plugin "
-      "writes (including future Phase 2 state additions) without erroring. "
-      "Recognized values today: `synced` | `stale-recipe` | `stale-python` "
-      "| `stale-both`. None when the field is absent (pre-Phase-1 note not "
-      "yet touched by the plugin); callers should treat None as 'unknown' "
-      "and NOT infer 'synced'."
+      "Note-level freshness, DERIVED from the note's hash lineage on "
+      "every read (drain 2026-08-17-0100, Phase 2). It is no longer a "
+      "stored frontmatter field: five writers with three decision "
+      "procedures produced five documented trust failures, so the value "
+      "is now computed from the lineage that sits beside it. Values: "
+      "`synced` | `stale-recipe` | `stale-python` | `unknown`. The value "
+      "names the FIRST broken link in the Description -> Recipe -> Python "
+      "chain; everything downstream of it is implicitly out of date too. "
+      "`unknown` means the lineage could not be evaluated (a legacy or "
+      "never-stamped note) and must NEVER be read as `synced`. Any "
+      "`sync_state:` still present in a note's frontmatter is ignored "
+      "residue; Phase 3 removes it."
     ),
   )
   # CW-mcp-and-plugin-support-vanilla-notes (drain 2026-07-26-1200):
@@ -665,12 +668,18 @@ class NoteContent(BaseModel):
   sync_state: str | None = Field(
     None,
     description=(
-      "S9 sync_state frontmatter field (drain 2026-07-23-1700 Phase 1). "
-      "Note-level rollup of facet-freshness relationships. Typed as "
-      "`str | None` — surfaces whatever the plugin wrote (see the "
-      "matching field on VaultNoteEntry for value grammar). None when "
-      "the field is absent; callers should treat None as 'unknown' and "
-      "NOT infer 'synced'."
+      "Note-level freshness, DERIVED from the note's hash lineage on "
+      "every read (drain 2026-08-17-0100, Phase 2). It is no longer a "
+      "stored frontmatter field: five writers with three decision "
+      "procedures produced five documented trust failures, so the value "
+      "is now computed from the lineage that sits beside it. Values: "
+      "`synced` | `stale-recipe` | `stale-python` | `unknown`. The value "
+      "names the FIRST broken link in the Description -> Recipe -> Python "
+      "chain; everything downstream of it is implicitly out of date too. "
+      "`unknown` means the lineage could not be evaluated (a legacy or "
+      "never-stamped note) and must NEVER be read as `synced`. Any "
+      "`sync_state:` still present in a note's frontmatter is ignored "
+      "residue; Phase 3 removes it."
     ),
   )
   # CW-mcp-and-plugin-support-vanilla-notes (drain 2026-07-26-1200).

@@ -620,7 +620,13 @@ class TestCommitMessageParam:
 
 
 def _shell_note(root: Path, note_id: str, recipe: str = "") -> Path:
-  """A create_note-shaped shell: empty Recipe, empty-SHA hash stamped."""
+  """A create_note-shaped shell: empty Recipe, empty-SHA hash stamped.
+
+  Drain 2026-08-17-0100 (Phase 2) — the `sync_state: stale-recipe` line
+  this helper used to write was removed when the real shell stopped
+  writing it. A helper that claims to be "create_note-shaped" and is not
+  is the fixture-drift trap the standing rule names.
+  """
   from forge_mcp.facet_hash import compute_facet_hash
 
   p = root / f"{note_id}.md"
@@ -629,7 +635,6 @@ def _shell_note(root: Path, note_id: str, recipe: str = "") -> Path:
     "---\n"
     "type: action\n"
     "inputs: []\n"
-    "sync_state: stale-recipe\n"
     f"recipe_hash: {compute_facet_hash('')}\n"
     "---\n"
     "\n# Description\n\ndoc.\n"
@@ -737,13 +742,15 @@ def _sync_state(root: Path, note_id: str) -> str:
   return m.group(1) if m else ""
 
 
-def test_commit_recipe_sets_synced_when_note_has_no_python(vault_root: Path):
-  """(a) No Python facet -> nothing left stale -> synced."""
+def test_commit_recipe_writes_no_sync_state_when_note_has_no_python(vault_root: Path):
+  """Drain 2026-08-17-0100 (Phase 2) — this used to assert the stamp said
+  "synced". commit_recipe is no longer a `sync_state` writer at all; the
+  value is derived on read, so a stamp could only ever disagree with it."""
   from forge_mcp.vault_fs import VaultFS
 
   _shell_note(vault_root, "notes/nopy")
   VaultFS(root=vault_root).commit_recipe("notes/nopy", "Return 42.", expected_version=None)
-  assert _sync_state(vault_root, "notes/nopy") == "synced"
+  assert _sync_state(vault_root, "notes/nopy") == ""
 
 
 def test_commit_recipe_sets_stale_python_when_python_present(vault_root: Path):
@@ -759,12 +766,20 @@ def test_commit_recipe_sets_stale_python_when_python_present(vault_root: Path):
     encoding="utf-8",
   )
   VaultFS(root=vault_root).commit_recipe("notes/withpy", "Return 999.", expected_version=None)
-  assert _sync_state(vault_root, "notes/withpy") == "stale-python", (
-    "commit_recipe does not re-transpile, so the Python facet is genuinely stale"
+  # Phase 2: the pre-existing value is LEFT ALONE (Phase 3 strips it) and
+  # not updated. The truth this test used to assert — that a
+  # non-re-transpiled Python facet is stale — is still asserted, now
+  # against the derived value in
+  # tests/test_sync_state_derived_on_read.py.
+  assert _sync_state(vault_root, "notes/withpy") == "stale-recipe", (
+    "the stored field must be neither refreshed nor removed this phase"
   )
 
 
-def test_commit_recipe_sync_state_untouched_shell_regression(vault_root: Path):
-  """(c) A never-committed shell keeps its creation-time stamp."""
+def test_a_fresh_shell_carries_no_sync_state_stamp(vault_root: Path):
+  """(c) Was: "a never-committed shell keeps its creation-time stamp."
+  Phase 2 removed the creation-time stamp — the shell's honest opening
+  state (`stale-recipe`: a Description with no Recipe derived from it) is
+  now computed on read instead of written at birth."""
   _shell_note(vault_root, "notes/shell_ss")
-  assert _sync_state(vault_root, "notes/shell_ss") == "stale-recipe"
+  assert _sync_state(vault_root, "notes/shell_ss") == ""

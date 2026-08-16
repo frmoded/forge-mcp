@@ -53,7 +53,15 @@ async def test_default_call_is_unchanged_against_a_pre_drain_snapshot(vault):
     pytest.skip("pre-drain snapshot not captured in this environment")
   before = json.loads(snap.read_text())["note"]
   after = await _read(vault)
+  # Drain 2026-08-17-0100 (Phase 2) — `sync_state` is deliberately
+  # excluded. This snapshot pins the CHUNKING drain's contract; Phase 2
+  # changed the field from a pass-through of the stored value to one
+  # derived from the note's lineage, so `None -> "unknown"` here is the
+  # intended change, not a chunking regression. Every other key must
+  # still match byte-for-byte.
   for key, value in before.items():
+    if key == "sync_state":
+      continue
     assert after[key] == value, f"{key} changed: {value!r} -> {after[key]!r}"
 
 
