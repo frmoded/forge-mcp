@@ -44,15 +44,53 @@ async def _read(vault, note_id="big", **extra):
 # -- backward compatibility -------------------------------------------------
 
 
+#: The genuine pre-drain capture from drain 2026-08-14-2120, moved in-repo
+#: by drain 2026-08-17-1220. It used to live at `/tmp/read_note_pre.json`,
+#: and the guard `pytest.skip`ped when that file was absent — so on the one
+#: machine that had it the test fired, and everywhere else (CI, a fresh
+#: checkout, a colleague's laptop) it passed silently without checking
+#: anything. That is the I23 shape: a gate that quietly passes when it
+#: cannot run is worse than no gate, because it reads as coverage.
+#:
+#: The file is the capture verbatim, NOT a re-baseline on current output —
+#: re-recording today's behaviour would have made the guard agree with
+#: whatever it is now measuring, which is the one thing a regression
+#: baseline must not do.
+_BASELINE = Path(__file__).parent / "fixtures" / "read_note_pre_drain_response.json"
+
+
+@pytest.mark.asyncio
+async def test_the_committed_baseline_still_describes_this_module_s_fixture():
+  """Fails loudly if `_BODY` or the fixture note is edited without
+  re-capturing the baseline.
+
+  Without this, changing `_BODY` would make the guard below fail on `raw`
+  and `description` with a 10-KB diff that looks like a read_note
+  regression and is not one. Named separately so the failure says which
+  of the two things went stale."""
+  before = json.loads(_BASELINE.read_text())["note"]
+  expected_raw = "---\ntype: vanilla\n---\n\n# Description\n\n" + _BODY
+  assert before["raw"] == expected_raw, (
+    "the committed baseline no longer matches this module's fixture note. "
+    "If you changed _BODY or the fixture on purpose, re-capture "
+    f"{_BASELINE.name} from the current implementation and say so in the "
+    "commit message; do not hand-edit it."
+  )
+
+
 @pytest.mark.asyncio
 async def test_default_call_is_unchanged_against_a_pre_drain_snapshot(vault):
   """§5's non-vacuous regression guard: assert against output captured from
   the PRE-drain implementation, not merely 'returns something'."""
-  snap = Path("/tmp/read_note_pre.json")
-  if not snap.is_file():
-    pytest.skip("pre-drain snapshot not captured in this environment")
-  before = json.loads(snap.read_text())["note"]
+  before = json.loads(_BASELINE.read_text())["note"]
   after = await _read(vault)
+  # Non-vacuity: an empty or key-less baseline would make the loop below
+  # assert nothing at all, which is the failure mode this whole drain is
+  # about. Pin the shape before comparing values.
+  assert set(before) >= {
+    "raw", "description", "frontmatter", "note_id", "type", "vault",
+    "inputs", "recipe", "python", "data",
+  }, f"baseline is missing keys it must pin: {sorted(before)}"
   # Drain 2026-08-17-0100 (Phase 2) — `sync_state` is deliberately
   # excluded. This snapshot pins the CHUNKING drain's contract; Phase 2
   # changed the field from a pass-through of the stored value to one
