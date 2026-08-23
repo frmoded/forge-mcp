@@ -5,6 +5,7 @@ from pathlib import Path
 
 import pytest
 
+from forge_mcp.description_placeholder import DESCRIPTION_PLACEHOLDER
 from forge_mcp.tools import create_note
 from forge_mcp.vault_fs import VaultFS
 from forge_mcp.vault_registry import VaultRegistry
@@ -49,7 +50,11 @@ async def test_creates_empty_note_with_description(
 async def test_creates_empty_note_without_description(
   single_vault_registry: VaultRegistry,
 ):
-  """Empty Description is fine — just an empty section."""
+  """Omitting the description seeds the authoring placeholder.
+
+  Drain 2026-08-23-2100 — was "just an empty section"; the fresh shell
+  now teaches the path to Inputs instead of showing a blank heading.
+  """
   result = await create_note.run(
     arguments={"note_id": "empty"},
     bearer="tok",
@@ -60,6 +65,26 @@ async def test_creates_empty_note_without_description(
   content = (vault_fs.root / "empty.md").read_text()
   assert "# Description" in content
   assert "# Recipe" not in content
+  assert DESCRIPTION_PLACEHOLDER in content
+
+
+@pytest.mark.asyncio
+async def test_supplied_description_is_not_overwritten_by_the_placeholder(
+  single_vault_registry: VaultRegistry,
+):
+  """Non-vacuity for the test above: the placeholder is a FALLBACK. A
+  caller-supplied description must survive untouched, or every
+  wizard-authored note would open with the hint instead of its own
+  intent."""
+  result = await create_note.run(
+    arguments={"note_id": "supplied", "description": "Play D major scale."},
+    bearer="tok",
+    vault_registry=single_vault_registry,
+  )
+  assert result["isError"] is False
+  content = (single_vault_registry.get().root / "supplied.md").read_text()
+  assert "Play D major scale." in content
+  assert DESCRIPTION_PLACEHOLDER not in content
 
 
 @pytest.mark.asyncio

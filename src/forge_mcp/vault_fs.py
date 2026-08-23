@@ -41,6 +41,7 @@ import sys
 from dataclasses import dataclass, field
 
 from ._vendor.sync_state import derive_sync_state
+from .description_placeholder import DESCRIPTION_PLACEHOLDER
 from .facet_hash import compute_facet_hash
 from pathlib import Path
 
@@ -1127,7 +1128,19 @@ class VaultFS:
     path = self.note_path(note_id)
     if path.exists():
       raise NoteExists(note_id, path)
-    desc_body = description.strip()
+    # Drain 2026-08-23-2100 — an omitted description seeds the authoring
+    # hint rather than an empty section, matching the plugin's
+    # `actionTemplate`. The blank shell is the cohort's first authoring
+    # moment and three empty headings teach nothing; the hint says what
+    # to write AND prompts naming inputs in plain English, which is what
+    # /generate now turns into typed `Input` declarations.
+    #
+    # The plugin's generate path recognises the untouched hint and
+    # resolves it to an empty description, so seeding it here cannot
+    # reach the LLM as intent. That recognition is an exact string
+    # match, which is why the constant is drift-tested against the
+    # plugin's rather than retyped.
+    desc_body = description.strip() or DESCRIPTION_PLACEHOLDER
     # Canonical V2a shape — matches the plugin's `actionTemplate`
     # (welcome-shape-classifier tests + modal.test.ts) and satisfies
     # `parse_note`'s frontmatter recognition (which requires a non-
@@ -1183,10 +1196,9 @@ class VaultFS:
       # 2026-08-05-2100 sweep (CCQA v0.2.331 smoke evidence).
       "---\n"
     )
-    if desc_body:
-      content = f"{frontmatter_block}\n# Description\n\n{desc_body}\n"
-    else:
-      content = f"{frontmatter_block}\n# Description\n\n\n"
+    # `desc_body` is never empty now (an omitted description falls back
+    # to the placeholder above), so there is one shape rather than two.
+    content = f"{frontmatter_block}\n# Description\n\n{desc_body}\n"
     path.parent.mkdir(parents=True, exist_ok=True)
     _atomic_write(path, content)
     return path
