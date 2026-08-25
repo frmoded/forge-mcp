@@ -623,6 +623,27 @@ def _validate_dir_path(path: str) -> None:
       )
 
 
+
+# Drain 2026-08-25-1050 — mirrors the engine's `_BAK_DIR_PATTERN`
+# (`forge/core/snippet_registry.py`). Backup directories do NOT start
+# with a dot, so the hidden-segment rule above never covered them.
+#
+# That was harmless while backup dirs did not exist — v0.2.106 deleted
+# the outgoing tree on re-extract. Drain 2026-08-25-0120 replaced that
+# with ONE rolling `<vault>.bak.previous/` per vault, by design, which
+# made this gap live.
+#
+# The engine and the plugin both refuse to walk these; forge-mcp is the
+# third reader of the same vaults and must agree, or a backup copy of a
+# note becomes a second candidate for a bare `[[name]]` — the shadowing
+# class behind AmbiguousSnippetResolutionError.
+_BAK_DIR_PATTERN = re.compile(r"\.bak\.")
+
+
+def _is_excluded_segment(seg: str) -> bool:
+  """True for a path segment no vault walk may descend into."""
+  return seg.startswith(".") or bool(_BAK_DIR_PATTERN.search(seg))
+
 def _validate_note_id(note_id: str) -> None:
   if not note_id:
     raise NoteIdInvalid("note_id is empty")
@@ -636,9 +657,9 @@ def _validate_note_id(note_id: str) -> None:
       raise NoteIdInvalid(
         f"note_id {note_id!r} contains a forbidden segment {seg!r}"
       )
-    if seg.startswith("."):
+    if _is_excluded_segment(seg):
       raise NoteIdInvalid(
-        f"note_id {note_id!r} refers to a hidden path {seg!r}"
+        f"note_id {note_id!r} refers to an excluded path {seg!r}"
       )
     if not _NOTE_ID_SEGMENT.match(seg):
       raise NoteIdInvalid(
@@ -1607,7 +1628,7 @@ class VaultFS:
       except ValueError:
         # Symlink escape — skip.
         continue
-      if any(part.startswith(".") for part in rel.parts):
+      if any(_is_excluded_segment(part) for part in rel.parts):
         continue
       note_id = str(rel.with_suffix(""))
       if filter is not None and filter not in note_id:
