@@ -258,6 +258,31 @@ def build_vault_note_closure(
       # dependencies were already handled at first-visit time.
       return
     if key in on_path:
+      # Drain 2026-08-26-1400 — a SELF-edge is legal. Recursion is
+      # constitutional (the tutorial's Chapter 8 exists to teach it) and
+      # the PLUGIN execution path has been running the bundled self-call
+      # `factorial` to 120 via the strip in CCQA's daily regression for
+      # weeks. Two execution paths disagreed about whether recursion is
+      # legal; the plugin path is truth-of-record.
+      #
+      # Returning here rather than recursing is what makes the note
+      # appear in its OWN closure: the frame above is mid-walk and will
+      # `packaged[key] = …` as soon as its wikilink loop finishes. That
+      # matters twice over, because the vault-note splice emits
+      # `def <name>(**kwargs)` at module scope for every packaged entry —
+      # so a note missing from its own closure runs into
+      # `NameError: name '<name>' is not defined`. The cycle refusal and
+      # that NameError were ONE defect.
+      #
+      # Runaway depth is still guarded, by Python's own recursion limit,
+      # which reports legibly — the driver's original mutual-recursion
+      # crash is the proof.
+      #
+      # NON-self cycles (A → B → A) still raise: nothing terminates
+      # them, and unlike a self-call there is no base-case idiom that
+      # makes them meaningful.
+      if note_id == origin:
+        return
       cycle = " → ".join(nid for _, nid in list(on_path)) + f" → {note_id}"
       raise CircularVaultNoteError(f"vault-note cycle detected: {cycle}")
 

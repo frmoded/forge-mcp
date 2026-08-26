@@ -172,12 +172,48 @@ def test_closure_inputs_threaded_through(vault: VaultFS):
 # ---------------------------------------------------------------------------
 
 
-def test_closure_direct_cycle_raises(vault: VaultFS):
-  """A vault-note that calls itself raises CircularVaultNoteError."""
+def test_closure_self_edge_is_legal(vault: VaultFS):
+  """A vault-note that calls ITSELF is packaged, not refused.
+
+  Drain 2026-08-26-1400 REVERSES the previous behaviour here (this test
+  used to assert CircularVaultNoteError). Recursion is constitutional —
+  the tutorial's Chapter 8 exists to teach it — and the PLUGIN execution
+  path has been running the bundled self-call `factorial` to 120 via the
+  strip in CCQA's daily regression for weeks. Two execution paths gave
+  opposite answers about whether recursion is legal; the plugin path is
+  truth-of-record and the server path was wrong.
+
+  Packaging the note is also what BINDS its own name: the vault-note
+  splice emits `def <name>(**kwargs)` at module scope for every packaged
+  entry, so a note absent from its own closure hits
+  `NameError: name '<name>' is not defined` at runtime. The cycle
+  refusal and the NameError the wizard reported are ONE defect.
+
+  Runaway depth stays guarded by Python's own recursion limit, which
+  reports legibly — the driver's original crash proved that.
+  """
   _action_note(vault, "self_ref", "Return Call [[self_ref]].")
-  with pytest.raises(CircularVaultNoteError) as excinfo:
-    build_vault_note_closure("Return Call [[self_ref]].", vault)
-  assert "self_ref" in str(excinfo.value)
+  packaged = build_vault_note_closure("Return Call [[self_ref]].", vault)
+  names = [p["name"] for p in packaged]
+  assert "self_ref" in names, (
+    "the note must be in its own closure, or its own name is unbound "
+    "when its code runs"
+  )
+  assert names.count("self_ref") == 1, "packaged exactly once, not per edge"
+
+
+def test_closure_self_edge_via_a_dependency_is_legal(vault: VaultFS):
+  """show_factorial → factorial → factorial.
+
+  The wizard's second casualty: a note that merely CALLS a self-recursive
+  note was refused too, because the self-edge raised while walking the
+  dependency. Both of the driver's notes failed for one reason.
+  """
+  _action_note(vault, "fact", "Return Call [[fact]].")
+  _action_note(vault, "show", "Return Call [[fact]].")
+  packaged = build_vault_note_closure("Return Call [[show]].", vault)
+  names = [p["name"] for p in packaged]
+  assert "fact" in names and "show" in names
 
 
 def test_closure_indirect_cycle_raises(vault: VaultFS):
