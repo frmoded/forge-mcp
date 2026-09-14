@@ -40,7 +40,7 @@ _STRING_RE = re.compile(r"(\"[^\"]*\"|'[^']*')")
 
 # Recipe grammar keywords and literals — never parameters.
 _KEYWORDS = {
-  "Let", "Input", "Return", "Call", "with", "Repeat", "times", "For",
+  "Let", "Input", "Return", "Print", "Call", "with", "Repeat", "times", "For",
   "each", "in", "If", "Otherwise", "True", "False", "None", "and", "or", "not",
 }
 

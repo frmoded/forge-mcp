@@ -386,6 +386,19 @@ Let kp = Call [[play_at_offsets]] with bars=bars.
 Return kp.
 """
 
+_NOTE_PRINT_IS_A_KEYWORD = """---
+type: action
+---
+
+# Description
+
+doc.
+
+# Recipe
+
+Print "hello, world".
+"""
+
 
 async def _read(registry, note_id, body):
   _write(registry.get().root, note_id, body)
@@ -426,5 +439,21 @@ async def test_undeclared_inputs_never_flagged_when_inputs_declared(
   """(c) inputs declared → never flagged, regardless of body."""
   note = await _read(single_vault_registry, "declared", _NOTE_INPUTS_DECLARED)
   assert note["inputs"] == ["bars"]
+  assert note["undeclared_inputs_detected"] is False
+  assert note["undeclared_inputs_summary"] is None
+
+
+@pytest.mark.asyncio
+async def test_undeclared_inputs_not_flagged_for_print_keyword(
+  single_vault_registry: VaultRegistry,
+):
+  """(d) drain 2026-09-14-1615. `Print` is a real v29 statement keyword
+  (transpiles to `print(expr)`), not a free identifier — this scan's
+  own `_KEYWORDS` set hadn't learned about it, matching the same gap
+  found in forge-transpile/free_identifiers.py and
+  forge-client-obsidian/src/free-identifiers-core.ts. A Print-using
+  note would otherwise spuriously flag as suspicious to wizard's own
+  `forge_read_note` inspection."""
+  note = await _read(single_vault_registry, "print_kw", _NOTE_PRINT_IS_A_KEYWORD)
   assert note["undeclared_inputs_detected"] is False
   assert note["undeclared_inputs_summary"] is None
