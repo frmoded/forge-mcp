@@ -575,7 +575,7 @@ def splice_recipe(
 #   * contains a NUL byte (path-injection defense),
 #   * starts with `.` (hidden files like `.obsidian/config.json` — not
 #     for agent-writable content).
-_NOTE_ID_SEGMENT = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\- ]*$")
+_NOTE_ID_SEGMENT = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\-() ]*$")
 
 # Drain 2026-08-03-1105 — non-`.md` vault files that forge_delete_note
 # may remove when `is_asset=True`. Deliberately narrow: exactly the
