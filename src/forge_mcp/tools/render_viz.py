@@ -56,6 +56,7 @@ _ALLOWED_KINDS = (
   "sinewave",
   "sinewave_comparison",
   "loudness_comparison",
+  "signal_sum",
   "wave_packet",
   "piano_keyboard",
   "harmonic_stack",
@@ -81,6 +82,13 @@ INPUT_SCHEMA: dict[str, Any] = {
         "loudness_comparison = 2+ amplitudes at ONE frequency, each lane "
         "annotated with its level in dB against the loudest (freqs held "
         "fixed, height varies) — for 'loudness is logarithmic'. "
+        "signal_sum = 2+ sinusoids SUMMED into ONE curve over a shared "
+        "time window (freqs, duration_s, amplitude, labels) — unlike "
+        "sinewave_comparison/loudness_comparison, which stack separate "
+        "lanes, this shows what the tones sound like TOGETHER: close "
+        "frequencies (a near-unison) produce a visible beat envelope; a "
+        "consonant ratio (e.g. an octave, 2:1) produces a clean, short-"
+        "period repeat instead. "
         "wave_packet = sinusoid under a Gaussian "
         "envelope (freq, cycles, envelope_center, envelope_width). "
         "piano_keyboard = keyboard segment (range, highlight, labels). "
@@ -151,8 +159,9 @@ DESCRIPTION = (
   # sinewave_comparison / loudness_comparison would have produced, purely
   # because this sentence was stale.
   "Render a pedagogical diagram (sinewave, sinewave_comparison, "
-  "loudness_comparison, wave_packet, piano_keyboard, harmonic_stack, "
-  "guitar_fretboard) to an SVG file in a vault. See the `kind` schema for "
+  "loudness_comparison, signal_sum, wave_packet, piano_keyboard, "
+  "harmonic_stack, guitar_fretboard) to an SVG file in a vault. "
+  "See the `kind` schema for "
   "which to reach for. Sibling to "
   "forge_render_music: that one renders pitches to staff notation, this "
   "renders parameters to a physics/notation figure. Embed the result in "
