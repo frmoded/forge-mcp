@@ -590,9 +590,21 @@ _NOTE_ID_SEGMENT = re.compile(r"^[A-Za-z0-9_.\-][A-Za-z0-9_.\-() ]*$")
 # mp3 only), and `.xml` is a general-purpose format that could just as
 # easily be a config file. An allowlist that admits a format no tool
 # writes is pure downside.
+#
+# `.html` — drain 2026-09-21-0900. Materially different risk from the
+# rest of this set: an `.html` asset can carry `<script>`, which the
+# other allowlisted extensions cannot. No new sandboxing ships here —
+# the vault-embed plugins that render `.html` assets (HTML Embed /
+# Local HTML Embed) already run the content in a sandboxed iframe
+# (`allow-scripts allow-same-origin allow-forms allow-popups`) at
+# render time, which is the layer responsible for containing it. The
+# traversal / hidden-segment / `.bak.` guards in `_validate_note_id`
+# apply identically regardless of extension, so nothing `.html`-specific
+# needed hardening there (verified: no other `.html` handling exists
+# anywhere in forge-mcp as of this drain).
 _ASSET_EXTENSIONS = frozenset({
   ".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif",
-  ".mp3", ".mid", ".midi", ".wav",
+  ".mp3", ".mid", ".midi", ".wav", ".html",
 })
 
 

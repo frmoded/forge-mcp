@@ -78,7 +78,7 @@ async def test_default_rejects_non_md_and_names_the_working_shape(vault):
 @pytest.mark.parametrize(
   "ext",
   [".svg", ".png", ".jpg", ".jpeg", ".webp", ".gif",
-   ".mp3", ".mid", ".midi", ".wav"],
+   ".mp3", ".mid", ".midi", ".wav", ".html"],
 )
 async def test_is_asset_accepts_each_allowlisted_extension(vault, ext):
   root, reg = vault

@@ -99,6 +99,20 @@ async def test_base64_binary_round_trip(plain_vault: VaultRegistry):
 
 
 @pytest.mark.asyncio
+async def test_creates_html_from_text_content(plain_vault: VaultRegistry):
+  """Drain 2026-09-21-0900 — .html joins the allowlist for the
+  vault-embed-plugin pattern (HTML Embed / Local HTML Embed)."""
+  root = plain_vault.get().root
+  html = "<html><body>hello</body></html>"
+  result = await _create(plain_vault, "widgets/demo.html", html)
+
+  assert result["isError"] is False
+  assert result["structuredContent"]["created"] is True
+  written = root / "widgets" / "demo.html"
+  assert written.read_text() == html
+
+
+@pytest.mark.asyncio
 async def test_git_vault_stages_the_new_file(git_vault: VaultRegistry):
   """§4 — git add on tracked vaults, NOT auto-committed."""
   root = git_vault.get().root
@@ -147,12 +161,15 @@ async def test_refuses_to_overwrite_existing(plain_vault: VaultRegistry):
 
 
 @pytest.mark.asyncio
-async def test_refuses_disallowed_extension(plain_vault: VaultRegistry):
-  """The allowlist is what stops this being a write-any-file primitive."""
+@pytest.mark.parametrize("rel", ["evil.py", "evil.exe", "evil.js", "evil.xml"])
+async def test_refuses_disallowed_extension(plain_vault: VaultRegistry, rel: str):
+  """The allowlist is what stops this being a write-any-file primitive.
+  Negative control for drain 2026-09-21-0900 — every still-unsupported
+  extension keeps raising exactly as before `.html` joined the allowlist."""
   root = plain_vault.get().root
-  result = await _create(plain_vault, "evil.py", "import os\n")
+  result = await _create(plain_vault, rel, "content\n")
   assert result["isError"] is True
-  assert not (root / "evil.py").exists()
+  assert not (root / rel).exists()
 
 
 @pytest.mark.asyncio

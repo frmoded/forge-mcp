@@ -80,8 +80,8 @@ OUTPUT_SCHEMA: dict[str, Any] = {
 }
 
 DESCRIPTION = (
-  "Write new caller-supplied content to a vault asset path (image/audio). "
-  "Use for hand-authored assets such as SVG illustrations; use "
+  "Write new caller-supplied content to a vault asset path (image/audio/"
+  "html). Use for hand-authored assets such as SVG illustrations; use "
   "forge_save_image_from_url when the content comes from a URL, and "
   "forge_move_asset/forge_copy_asset to relocate a file that already "
   "exists. `content_encoding` must be `text` or `base64` and is never "
@@ -90,7 +90,9 @@ DESCRIPTION = (
   "never overwrites. Only asset extensions are permitted (not `.md` "
   "notes). On git-tracked vaults the new file is `git add`ed but NOT "
   "committed. Pass `vault` to target a specific vault; omit for the "
-  "first-registered."
+  "first-registered. `.html` content should be self-contained (inline "
+  "CSS/JS, no assumption of external network access) — the vault-embed "
+  "plugins that render it run it in a sandboxed iframe."
 )
 
 
