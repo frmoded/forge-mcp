@@ -836,6 +836,26 @@ class UnregisterVaultResult(BaseModel):
   )
 
 
+class CheckGitLockResult(BaseModel):
+  """Result envelope for forge_check_git_lock. Drain 2026-09-22-1830."""
+
+  model_config = ConfigDict(extra="forbid")
+
+  vault: str = Field(..., description="Vault name this status was read for.")
+  locked: bool = Field(..., description="Whether `.git/index.lock` currently exists.")
+  age_seconds: float | None = Field(
+    default=None,
+    description="Lock file age in seconds, or null when locked is False.",
+  )
+  would_clear_next_write: bool = Field(
+    ...,
+    description=(
+      "Whether the next git-touching forge-mcp write against this vault "
+      "would auto-clear this lock (age past the staleness threshold)."
+    ),
+  )
+
+
 # -----------------------------------------------------------------------------
 # Error envelope
 # -----------------------------------------------------------------------------

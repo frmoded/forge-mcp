@@ -39,6 +39,7 @@ from .resources.artifact_uri import read_artifact_resource
 from .resources.note_uri import parse_forge_note_uri, read_note_resource
 from .resources.recipe_uri import read_recipe_resource
 from .tools import (
+  check_git_lock,
   commit_recipe,
   compile_recipe,
   copy_asset,
@@ -362,6 +363,27 @@ def _make_server(
       return _to_call_tool_result(auth_error_to_tool_result(exc))
     result = await list_vaults.run(
       arguments={}, bearer=bearer, vault_registry=registry,
+    )
+    return _to_call_tool_result(result)
+
+  @server.tool(
+    name=check_git_lock.TOOL_NAME,
+    description=check_git_lock.DESCRIPTION,
+    structured_output=True,
+  )
+  async def _forge_check_git_lock(
+    ctx: Context,
+    vault: str | None = None,
+  ) -> CallToolResult:
+    try:
+      bearer = _bearer_from_context(ctx)
+    except BearerExtractionError as exc:
+      return _to_call_tool_result(auth_error_to_tool_result(exc))
+    args: dict[str, Any] = {}
+    if vault is not None:
+      args["vault"] = vault
+    result = await check_git_lock.run(
+      arguments=args, bearer=bearer, vault_registry=registry,
     )
     return _to_call_tool_result(result)
 

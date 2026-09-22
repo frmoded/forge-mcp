@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from dataclasses import dataclass, field
 
 from ._vendor.sync_state import derive_sync_state
@@ -1326,6 +1327,13 @@ class VaultFS:
     """
     new_path.parent.mkdir(parents=True, exist_ok=True)
     if _is_git_tracked(self.root):
+      # Drain 2026-09-22-1830 — same class of vulnerability
+      # delete_note's checkout below was fixed for (this method mirrors
+      # delete_note's pattern by design, per the comment further down).
+      # Not one of the prompt's three named call sites, but discovered
+      # while locating delete_note's own call site fresh; fixing it here
+      # too keeps the two symmetric paths symmetric. See FEEDBACK.
+      _clear_stale_git_lock(self.root)
       rel_old = old_path.relative_to(self.root)
       rel_new = new_path.relative_to(self.root)
       # CW-forge-rename-note-handle-dirty-working-tree (drain 1905):
@@ -1447,6 +1455,12 @@ class VaultFS:
     dst.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(src, dst)
     if _is_git_tracked(self.root):
+      # Drain 2026-09-22-1830 — same class of vulnerability delete_note
+      # had: an unhandled raise on a stale-lock CalledProcessError. Not
+      # one of the prompt's three named call sites, discovered while
+      # sweeping this file's other index-modifying git calls. See
+      # FEEDBACK.
+      _clear_stale_git_lock(self.root)
       rel_new = dst.relative_to(self.root)
       try:
         subprocess.run(
@@ -1460,6 +1474,18 @@ class VaultFS:
         ) from exc
       return dst, True
     return dst, False
+
+  def check_git_lock(self, max_age_seconds: int = 60) -> dict:
+    """Read-only diagnostic: does this vault's `.git/index.lock`
+    currently exist, and would the next git-touching write clear it?
+    Backs `forge_check_git_lock`. Drain 2026-09-22-1830.
+
+    Never modifies anything — a non-git-tracked vault always reports
+    `locked: False`.
+    """
+    if not _is_git_tracked(self.root):
+      return {"locked": False, "age_seconds": None, "would_clear_next_write": False}
+    return _git_lock_status(self.root, max_age_seconds)
 
   def create_asset(
     self, dest_path: str, data: bytes,
@@ -1491,6 +1517,9 @@ class VaultFS:
     dst.parent.mkdir(parents=True, exist_ok=True)
     dst.write_bytes(data)
     if _is_git_tracked(self.root):
+      # Drain 2026-09-22-1830 — same class of vulnerability as
+      # copy_asset's sibling git-add above; see that comment.
+      _clear_stale_git_lock(self.root)
       rel_new = dst.relative_to(self.root)
       try:
         subprocess.run(
@@ -1549,6 +1578,7 @@ class VaultFS:
       kind = "asset" if is_asset else "note"
       raise NoteNotFound(f"{kind} {note_id!r} not found at {path}")
     if _is_git_tracked(self.root):
+      _clear_stale_git_lock(self.root)
       rel = path.relative_to(self.root)
       # CW-forge-delete-note-handle-dirty-working-tree (drain 1800):
       # `git ls-tree HEAD -- <rel>` pre-check tells us whether HEAD
@@ -1777,6 +1807,85 @@ def _is_git_tracked(root: Path) -> bool:
   return (root / ".git").exists()
 
 
+def _git_lock_status(root: Path, max_age_seconds: int = 60) -> dict:
+  """Read-only companion to `_clear_stale_git_lock` — reports lock
+  state without touching anything. Backs `forge_check_git_lock`.
+
+  Same staleness threshold and reasoning as `_clear_stale_git_lock`;
+  kept as a separate function rather than a `dry_run` flag on the
+  clearing function so a read-only diagnostic can never, even by a
+  future refactor, accidentally delete anything.
+  """
+  lock_path = root / ".git" / "index.lock"
+  if not lock_path.is_file():
+    return {"locked": False, "age_seconds": None, "would_clear_next_write": False}
+  age = time.time() - lock_path.stat().st_mtime
+  return {
+    "locked": True,
+    "age_seconds": age,
+    "would_clear_next_write": age >= max_age_seconds,
+  }
+
+
+def _clear_stale_git_lock(root: Path, max_age_seconds: int = 60) -> bool:
+  """Detect and clear a stale `.git/index.lock`, if present and old
+  enough. Returns True if a lock was cleared, False otherwise (no lock
+  present, or the lock is too fresh to be considered stale).
+
+  Drain 2026-09-22-1830. Staleness is judged by AGE ONLY: the lock
+  file's mtime vs now. Git's lock file does not portably expose the
+  holding PID for a liveness check, so age is the only signal
+  available without extra tooling. These vaults are small text-file
+  repos where a real `git add`/`commit`/`rm` completes in well under a
+  second; both real stuck locks observed in this ecosystem this
+  session were stale for DAYS, not seconds — the 60s default floor is
+  a deliberately wide margin in both directions. A fresh lock (a
+  genuinely live, if slow, concurrent operation) is left alone.
+
+  Safety, confirmed empirically rather than assumed: deleting
+  `index.lock` out from under a process that still holds it open for
+  writing does not corrupt the index. POSIX unlink-while-open leaves
+  the file descriptor valid — the live process's own writes to the
+  now-unlinked inode still succeed — but git's FINAL step (an atomic
+  `rename(index.lock, index)`) fails cleanly with ENOENT once the
+  source path is gone. The real `.git/index` is never touched; the
+  live operation simply errors out instead of silently corrupting or
+  silently succeeding. Verified by directly simulating git's own
+  open/write/rename lock protocol against a real repo (open the lock
+  exclusive, write to it, unlink it out from under the open fd, write
+  again, then attempt the rename) rather than asserted from git's
+  documentation alone.
+
+  The safety argument for treating "old" as "safe to clear" at all
+  rests on these vaults being effectively single-writer in practice:
+  one forge-mcp server process per vault, with wizard/CC/driver never
+  git-writing to a forge-mcp-registered vault from outside forge-mcp
+  itself. This is not a general-purpose lock-clearing utility — it
+  only ever touches `<root>/.git/index.lock` for vaults forge-mcp
+  itself is about to git-touch.
+  """
+  lock_path = root / ".git" / "index.lock"
+  if not lock_path.is_file():
+    return False
+  age = time.time() - lock_path.stat().st_mtime
+  if age < max_age_seconds:
+    return False
+  try:
+    lock_path.unlink()
+  except OSError as exc:
+    print(
+      f"forge-mcp git-lock: stale lock at {lock_path} (age={age:.0f}s) "
+      f"found but could NOT be cleared: {exc}",
+      file=sys.stderr,
+    )
+    return False
+  print(
+    f"forge-mcp git-lock: cleared stale lock at {lock_path} (age={age:.0f}s)",
+    file=sys.stderr,
+  )
+  return True
+
+
 def _git_staged_blob(root: Path, rel: Path) -> bytes | None:
   """Bytes of `rel` as currently staged in the index.
 
@@ -1833,6 +1942,7 @@ def _git_commit_file(
   report it.
   """
   rel = path.relative_to(root)
+  _clear_stale_git_lock(root)
   try:
     subprocess.run(
       ["git", "-C", str(root), "add", "--", str(rel)],
@@ -1949,6 +2059,7 @@ def _git_commit_paths(
   depending on git version. Path-scoped commit picks up the staged
   changes on those rels directly.
   """
+  _clear_stale_git_lock(root)
   try:
     subprocess.run(
       ["git", "-C", str(root), "commit", "-m", message, "--"]
