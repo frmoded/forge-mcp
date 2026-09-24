@@ -758,6 +758,11 @@ def _make_server(
       args["tempo_bpm"] = tempo_bpm
     if duration_quarters is not None:
       args["duration_quarters"] = duration_quarters
+    # Drain 2026-09-24-2200 — this was declared in the signature above but
+    # never forwarded, so `run` always saw the default False and every chord
+    # request rendered as a sequence.
+    if simultaneous is not None:
+      args["simultaneous"] = simultaneous
     if overwrite is not None:
       args["overwrite"] = overwrite
     if max_size_mb is not None:
