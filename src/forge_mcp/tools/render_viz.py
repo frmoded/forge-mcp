@@ -103,8 +103,12 @@ INPUT_SCHEMA: dict[str, Any] = {
       "type": "object",
       "description": (
         "Kind-specific parameters. Every one has a default, so `{}` "
-        "renders a sensible example of the kind. Unknown keys are "
-        "rejected with a 400 naming the bad key."
+        "renders a sensible example of the kind. EVERY kind also accepts "
+        "optional `title` and `subtitle` strings (the diagram\'s heading "
+        "and one-line takeaway, drawn at the bottom per the music-vault "
+        "style guide); omit them to get a sensible default derived from "
+        "the kind and its parameters. Unknown keys are rejected with a "
+        "400 naming the bad key."
       ),
     },
     "target_path": {
@@ -165,7 +169,9 @@ DESCRIPTION = (
   "which to reach for. Sibling to "
   "forge_render_music: that one renders pitches to staff notation, this "
   "renders parameters to a physics/notation figure. Embed the result in "
-  "a note with ![[<target_path>]]. Refuses to overwrite unless "
+  "a note with ![[<target_path>]]. Every kind takes optional `title` "
+  "and `subtitle` params (heading + one-line takeaway). Refuses to "
+  "overwrite unless "
   "overwrite=true. Auto-commits the written file when the vault is "
   "git-tracked and returns git_sha (null if untracked or the commit "
   "failed — the file is written either way)."
