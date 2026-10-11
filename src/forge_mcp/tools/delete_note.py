@@ -10,6 +10,9 @@ retire notes through MCP alone.
   are immediate + irreversible via forge-mcp; recovery is via git for
   tracked vaults, none for untracked.
 - No `force` flag. No bulk delete. One note per call.
+- Drain 2026-10-10-2100 (c): the result is only ever a success once the
+  post-condition holds (see VaultFS.delete_note) — CCQA found a delete
+  that committed a MODIFICATION of the note and still said "Deleted".
 """
 from __future__ import annotations
 
@@ -107,7 +110,10 @@ DESCRIPTION = (
   "NOT swept in. Pass `vault` to target a specific vault; omit for "
   "the first-registered. Pass optional `message` to override the "
   "default `delete note <note_id>` commit subject. Library notes "
-  "cannot be deleted through this tool."
+  "cannot be deleted through this tool. Success is returned only after "
+  "the post-condition is verified (path absent from the working tree, "
+  "the index and HEAD); a git lock is retried briefly, and a delete "
+  "that did not take effect is an error, never a success."
 )
 
 

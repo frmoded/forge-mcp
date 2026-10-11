@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 
@@ -1567,6 +1568,17 @@ class VaultFS:
     Raises NoteNotFound if the note doesn't exist.
     Raises NoteIdInvalid on traversal / shape violations.
 
+    Drain 2026-10-10-2100 (c) — success is only returned once the
+    POST-CONDITION holds: the path is absent from the working tree, the
+    index and HEAD (and `git status` shows no entry for it). A git exit
+    code of 0 is not taken as proof. Lock errors are retried with a short
+    bounded backoff; a file re-created by another writer between `git rm`
+    and the commit is removed again and the whole sequence retried (at most
+    `_DELETE_ATTEMPTS`); if it still does not hold, VaultFSError is raised —
+    never a success. Concurrent deletes in one vault are serialized.
+    CCQA's 7df5c08 ("delete note ..." that MODIFIED the file) was exactly
+    that re-created-before-commit shape.
+
     Drain 2026-08-03-1105 — `is_asset=True` resolves via `asset_path`
     (no `.md` coercion, extension allowlist) instead of `note_path`.
     That swap is the ONLY difference: the dirty-tree reset, `git rm`,
@@ -1577,59 +1589,78 @@ class VaultFS:
     if not path.is_file():
       kind = "asset" if is_asset else "note"
       raise NoteNotFound(f"{kind} {note_id!r} not found at {path}")
-    if _is_git_tracked(self.root):
-      _clear_stale_git_lock(self.root)
-      rel = path.relative_to(self.root)
-      # CW-forge-delete-note-handle-dirty-working-tree (drain 1800):
-      # `git ls-tree HEAD -- <rel>` pre-check tells us whether HEAD
-      # tracks this path. If it does, reset any unstaged working-tree
-      # modifications before `git rm` (else `git rm` refuses with
-      # "local modifications"). If HEAD does NOT track the path
-      # (uncommitted / just-added-never-committed), skip the reset
-      # and fall through to `Path.unlink()` — the file is effectively
-      # untracked from HEAD's perspective and `git rm` would also
-      # refuse. `ls-tree` is quiet (empty stdout when the path is
-      # absent, non-empty when present) and returns 0 either way for
-      # a valid ref, so we probe stdout rather than exit code.
-      ls_tree = subprocess.run(
-        ["git", "-C", str(self.root), "ls-tree", "HEAD", "--", str(rel)],
-        capture_output=True, text=True, check=False,
-      )
-      in_head = ls_tree.returncode == 0 and ls_tree.stdout.strip() != ""
-      if not in_head:
-        # File never committed — no HEAD entry to reset from. Plain
-        # unlink; git-status will then show "?? <rel>" cleaned.
-        path.unlink()
-        return path, None, None
-      # File is tracked in HEAD. Reset any working-tree drift first.
-      try:
-        subprocess.run(
-          ["git", "-C", str(self.root), "checkout", "HEAD", "--", str(rel)],
-          capture_output=True, text=True, check=True,
-        )
-      except subprocess.CalledProcessError as exc:
-        raise VaultFSError(
-          f"git checkout HEAD failed for {note_id!r} (pre-delete reset): "
-          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
-        ) from exc
-      try:
-        subprocess.run(
-          ["git", "-C", str(self.root), "rm", "--", str(rel)],
-          capture_output=True, text=True, check=True,
-        )
-      except subprocess.CalledProcessError as exc:
-        raise VaultFSError(
-          f"git rm failed for {note_id!r}: "
-          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
-        ) from exc
-      # Auto-commit the deletion (drain 2026-07-24-1500). Path-scoped
-      # so unrelated staged changes are NOT swept in.
-      commit_message = message or f"delete note {_stem(rel)}"
-      git_sha = _git_commit_paths(self.root, [rel], commit_message)
-      return path, git_sha, commit_message
-    else:
+    if not _is_git_tracked(self.root):
       path.unlink()
-    return path, None, None
+      problems = _delete_postcondition_problems(self.root, path, None)
+      if problems:
+        raise VaultFSError(
+          f"delete of {note_id!r} reported success but {'; '.join(problems)}"
+        )
+      return path, None, None
+
+    rel = path.relative_to(self.root)
+    commit_message = message or f"delete note {_stem(rel)}"
+    # Drain 2026-10-10-2100 (c) — one delete at a time per vault (in this
+    # process). The sequence below is checkout -> rm -> commit -> verify; two
+    # of them interleaving in one repo contend for index.lock and widen the
+    # window in which another writer can put the file back.
+    with _vault_delete_lock(self.root):
+      last_problems: list[str] = []
+      for attempt in range(_DELETE_ATTEMPTS):
+        if attempt > 0:
+          _sleep(_GIT_LOCK_BACKOFF_SECONDS[min(attempt - 1, len(_GIT_LOCK_BACKOFF_SECONDS) - 1)])
+        _clear_stale_git_lock(self.root)
+        # CW-forge-delete-note-handle-dirty-working-tree (drain 1800):
+        # `git ls-tree HEAD -- <rel>` pre-check tells us whether HEAD
+        # tracks this path. If it does, reset any unstaged working-tree
+        # modifications before `git rm` (else `git rm` refuses with
+        # "local modifications"). If HEAD does NOT track the path
+        # (uncommitted / just-added-never-committed), skip the reset
+        # and fall through to `Path.unlink()` — the file is effectively
+        # untracked from HEAD's perspective and `git rm` would also
+        # refuse. `ls-tree` is quiet (empty stdout when the path is
+        # absent, non-empty when present) and returns 0 either way for
+        # a valid ref, so we probe stdout rather than exit code.
+        # Re-evaluated on EVERY attempt: a previous attempt's commit may
+        # already have removed it from HEAD while a writer re-created it.
+        ls_tree = subprocess.run(
+          ["git", "-C", str(self.root), "ls-tree", "HEAD", "--", str(rel)],
+          capture_output=True, text=True, check=False,
+        )
+        in_head = ls_tree.returncode == 0 and ls_tree.stdout.strip() != ""
+        git_sha: str | None = None
+        if not in_head:
+          # File never committed — no HEAD entry to reset from. Plain
+          # unlink; git-status will then show "?? <rel>" cleaned.
+          path.unlink(missing_ok=True)
+        else:
+          # File is tracked in HEAD. Reset any working-tree drift first.
+          _git_step(
+            self.root, ["checkout", "HEAD", "--", str(rel)],
+            what=f"git checkout HEAD for {note_id!r} (pre-delete reset)",
+          )
+          _git_step(self.root, ["rm", "--", str(rel)], what=f"git rm for {note_id!r}")
+          if path.exists():
+            # Re-created between `git rm` and the commit by another writer.
+            # `git commit -- <rel>` reads the WORKING TREE for its pathspec,
+            # so committing now would record a MODIFICATION and undo the
+            # delete (CCQA's 7df5c08). Take it out again first.
+            path.unlink(missing_ok=True)
+          try:
+            git_sha = _git_commit_paths_strict(self.root, [rel], commit_message)
+          except VaultFSError as exc:
+            raise VaultFSError(
+              f"{exc} — the deletion of {str(rel)!r} is staged but NOT committed"
+            ) from exc
+        last_problems = _delete_postcondition_problems(self.root, path, rel)
+        if not last_problems:
+          # Auto-commit contract (drain 2026-07-24-1500) unchanged: the SHA
+          # of the commit that removed it, or None when HEAD never had it.
+          return path, git_sha, (commit_message if in_head else None)
+      raise VaultFSError(
+        f"delete of {note_id!r} did not take effect after {_DELETE_ATTEMPTS} attempts: "
+        f"{'; '.join(last_problems)}. Another process may be writing this note."
+      )
 
   # -- Listing (for forge_read_notes_in_vault) ------------------------------
 
@@ -2038,6 +2069,101 @@ def _classify_note_type(frontmatter: dict) -> str:
   if raw == "data":
     return "data"
   return "vanilla"
+
+
+# ---------------------------------------------------------------------------
+# Delete post-condition, bounded lock retry, per-vault serialization
+# (drain 2026-10-10-2100 (c))
+# ---------------------------------------------------------------------------
+
+#: Seam: tests record the backoff instead of sleeping.
+_sleep = time.sleep
+#: Backoff before each RETRY of a single git step that hit a lock error. At
+#: most len() retries, so one step costs at most ~0.75 s of waiting.
+_GIT_LOCK_BACKOFF_SECONDS: tuple[float, ...] = (0.05, 0.1, 0.2, 0.4)
+#: Whole checkout -> rm -> commit -> verify sequences before giving up.
+_DELETE_ATTEMPTS = 3
+
+_VAULT_DELETE_LOCKS: dict[str, threading.Lock] = {}
+_VAULT_DELETE_LOCKS_GUARD = threading.Lock()
+
+
+def _vault_delete_lock(root: Path) -> threading.Lock:
+  """The one lock serializing deletes in the vault at `root` (this process)."""
+  key = str(root.resolve())
+  with _VAULT_DELETE_LOCKS_GUARD:
+    return _VAULT_DELETE_LOCKS.setdefault(key, threading.Lock())
+
+
+def _is_git_lock_error(text: str) -> bool:
+  t = text.lower()
+  return (
+    "index.lock" in t
+    or "another git process" in t
+    or ("unable to create" in t and ".lock" in t)
+  )
+
+
+def _git_step(
+  root: Path, args: list[str], *, what: str,
+) -> "subprocess.CompletedProcess[str]":
+  """`git -C <root> <args>`. A LOCK error is retried with the bounded backoff
+  (clearing a stale lock between tries); any other failure, or a lock that
+  outlasts the backoff, raises VaultFSError carrying git's own message."""
+  retries = len(_GIT_LOCK_BACKOFF_SECONDS)
+  for attempt in range(retries + 1):
+    try:
+      return subprocess.run(
+        ["git", "-C", str(root), *args],
+        capture_output=True, text=True, check=True,
+      )
+    except subprocess.CalledProcessError as exc:
+      detail = (exc.stderr or exc.stdout or str(exc)).strip()
+      if not _is_git_lock_error(detail) or attempt == retries:
+        raise VaultFSError(f"{what} failed: {detail}") from exc
+      _sleep(_GIT_LOCK_BACKOFF_SECONDS[attempt])
+      _clear_stale_git_lock(root)
+  raise AssertionError("unreachable")  # pragma: no cover
+
+
+def _git_commit_paths_strict(root: Path, rels: list[Path], message: str) -> str:
+  """Path-scoped `git commit -m <message> -- <rel...>` returning the new HEAD
+  SHA, RAISING VaultFSError on failure. `_git_commit_paths` (below) swallows
+  every failure and is kept for rename; delete needs the failure."""
+  _clear_stale_git_lock(root)
+  _git_step(
+    root, ["commit", "-m", message, "--", *[str(r) for r in rels]],
+    what="git commit",
+  )
+  sha = _git_step(root, ["rev-parse", "HEAD"], what="git rev-parse HEAD").stdout.strip()
+  if not sha:
+    raise VaultFSError("git rev-parse HEAD returned nothing after the delete commit")
+  return sha
+
+
+def _delete_postcondition_problems(
+  root: Path, path: Path, rel: Path | None,
+) -> list[str]:
+  """What is still true of a path that was supposed to be deleted. Empty list
+  = the delete took effect. Probes the repo itself — working tree, index,
+  HEAD, `git status` — rather than trusting any command's exit code."""
+  problems: list[str] = []
+  if path.exists():
+    problems.append("the file is still present in the working tree")
+  if rel is None:
+    return problems
+  probe = lambda *a: subprocess.run(  # noqa: E731
+    ["git", "-C", str(root), *a], capture_output=True, text=True, check=False,
+  )
+  if probe("ls-files", "--error-unmatch", "--", str(rel)).returncode == 0:
+    problems.append("the path is still in the git index")
+  tree = probe("ls-tree", "HEAD", "--", str(rel))
+  if tree.returncode == 0 and tree.stdout.strip():
+    problems.append("the path is still in HEAD (the delete commit did not remove it)")
+  status = probe("status", "--porcelain", "--", str(rel))
+  if status.returncode == 0 and status.stdout.strip():
+    problems.append(f"git status still reports {status.stdout.strip()!r}")
+  return problems
 
 
 def _git_commit_paths(
