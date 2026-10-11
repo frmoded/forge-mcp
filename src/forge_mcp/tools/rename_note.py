@@ -11,6 +11,11 @@ so wizard can restructure a vault through MCP alone.
 - If the vault is git-tracked, uses `git mv` so history follows the
   rename; otherwise plain `Path.rename`.
 - Parent directories for the new note are created if absent.
+- Drain 2026-10-11-0900 §5: success is returned only once the move's
+  post-condition holds (old path absent and new path present in the
+  working tree, the index and HEAD) — the same contract as
+  forge_delete_note. Lock errors are retried briefly; anything else is
+  an error, never a success.
 """
 from __future__ import annotations
 

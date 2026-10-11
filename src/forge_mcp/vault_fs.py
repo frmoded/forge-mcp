@@ -1327,69 +1327,80 @@ class VaultFS:
     Returns (new_path, git_sha_or_None, commit_message_or_None).
     """
     new_path.parent.mkdir(parents=True, exist_ok=True)
-    if _is_git_tracked(self.root):
-      # Drain 2026-09-22-1830 — same class of vulnerability
-      # delete_note's checkout below was fixed for (this method mirrors
-      # delete_note's pattern by design, per the comment further down).
-      # Not one of the prompt's three named call sites, but discovered
-      # while locating delete_note's own call site fresh; fixing it here
-      # too keeps the two symmetric paths symmetric. See FEEDBACK.
+    if not _is_git_tracked(self.root):
+      old_path.rename(new_path)
+      problems = _move_postcondition_problems(self.root, old_path, new_path, None, None)
+      if problems:
+        raise VaultFSError(f"move of {label} reported success but {'; '.join(problems)}")
+      return new_path, None, None
+
+    rel_old = old_path.relative_to(self.root)
+    rel_new = new_path.relative_to(self.root)
+    commit_message = message or default_message
+    # Drain 2026-10-11-0900 §5 — the same contract as delete_note (drain 2026-10-10-2100): one git-writing sequence at a time per vault
+    # (in this process), a post-condition verified against the repo, bounded retries on lock errors, error never false success.
+    with _vault_git_write_lock(self.root):
+      # Drain 2026-09-22-1830 — same class of vulnerability delete_note's checkout was fixed for (this method mirrors delete_note's
+      # pattern by design).
       _clear_stale_git_lock(self.root)
-      rel_old = old_path.relative_to(self.root)
-      rel_new = new_path.relative_to(self.root)
-      # CW-forge-rename-note-handle-dirty-working-tree (drain 1905):
-      # Mirror delete_note's pattern (drain 1800). `git ls-tree HEAD`
-      # pre-check tells us whether HEAD tracks the source. If it does,
-      # reset any unstaged working-tree modifications before `git mv`
-      # (else `git mv` silently promotes the dirty content into the
-      # rename target, mixing the plugin's re-derivation into what the
-      # MCP client thinks is a pure move). If HEAD does NOT track the
-      # source (uncommitted / just-added-never-committed), skip the
-      # reset and fall through to `Path.rename()` — no HEAD entry to
-      # reset from, and `git mv` on such a source behaves indistinguish-
-      # ably from `Path.rename()` + a target add.
+      # CW-forge-rename-note-handle-dirty-working-tree (drain 1905): `git ls-tree HEAD` pre-check tells us whether HEAD tracks the
+      # source. If it does, reset any unstaged working-tree modifications before `git mv` (else `git mv` silently promotes the
+      # dirty content into the rename target). If HEAD does NOT track the source (uncommitted / just-added-never-committed), skip
+      # the reset and fall through to `Path.rename()` — no HEAD entry to reset from.
       ls_tree = subprocess.run(
         ["git", "-C", str(self.root), "ls-tree", "HEAD", "--", str(rel_old)],
         capture_output=True, text=True, check=False,
       )
       in_head = ls_tree.returncode == 0 and ls_tree.stdout.strip() != ""
       if not in_head:
-        # Source never committed — no HEAD entry to reset from. Plain
-        # rename; git-status will show target as untracked (?? <rel_new>).
+        # Source never committed — no HEAD entry to reset from. Plain rename; git-status will show target as untracked.
         old_path.rename(new_path)
+        problems = _move_postcondition_problems(self.root, old_path, new_path, None, None)
+        if problems:
+          raise VaultFSError(f"move of {label} reported success but {'; '.join(problems)}")
         return new_path, None, None
-      # Source is tracked in HEAD. Reset any working-tree drift first.
-      try:
-        subprocess.run(
-          ["git", "-C", str(self.root), "checkout", "HEAD", "--", str(rel_old)],
-          capture_output=True, text=True, check=True,
+
+      last_problems: list[str] = []
+      for attempt in range(_DELETE_ATTEMPTS):
+        if attempt > 0:
+          _sleep(_GIT_LOCK_BACKOFF_SECONDS[min(attempt - 1, len(_GIT_LOCK_BACKOFF_SECONDS) - 1)])
+          _clear_stale_git_lock(self.root)
+          if not _move_postcondition_problems(self.root, old_path, new_path, rel_old, rel_new):
+            head = _git_step(self.root, ["rev-parse", "HEAD"], what="git rev-parse HEAD").stdout.strip()
+            return new_path, head or None, commit_message
+        if not new_path.exists():
+          # Source is tracked in HEAD. Reset any working-tree drift first, then move.
+          _git_step(
+            self.root, ["checkout", "HEAD", "--", str(rel_old)],
+            what=f"git checkout HEAD for {label} (pre-move reset)",
+          )
+          _git_step(self.root, ["mv", str(rel_old), str(rel_new)], what=f"git mv for {label}")
+        if new_path.exists() and old_path.exists():
+          # The OLD path was re-created by another writer after the move landed. A path-scoped commit that names it reads the
+          # WORKING TREE for it and would record the resurrection, so take it out first. (Never when the new path is missing: then
+          # the old file is the only copy.)
+          old_path.unlink(missing_ok=True)
+        sha: str | None = None
+        status = subprocess.run(
+          ["git", "-C", str(self.root), "status", "--porcelain", "--", str(rel_old), str(rel_new)],
+          capture_output=True, text=True, check=False,
         )
-      except subprocess.CalledProcessError as exc:
-        raise VaultFSError(
-          f"git checkout HEAD failed for {label} (pre-move reset): "
-          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
-        ) from exc
-      try:
-        subprocess.run(
-          ["git", "-C", str(self.root), "mv", str(rel_old), str(rel_new)],
-          capture_output=True, text=True, check=True,
-        )
-      except subprocess.CalledProcessError as exc:
-        raise VaultFSError(
-          f"git mv failed for {label}: "
-          f"{exc.stderr.strip() or exc.stdout.strip() or exc}"
-        ) from exc
-      # Auto-commit the move (drain 2026-07-24-1500). Path-scoped so
-      # unrelated staged changes are NOT swept in. Both old and new rels
-      # are named so git commits the deletion + addition atomically.
-      commit_message = message or default_message
-      git_sha = _git_commit_paths(
-        self.root, [rel_old, rel_new], commit_message,
+        if status.returncode != 0 or status.stdout.strip():
+          # Auto-commit the move (drain 2026-07-24-1500). Path-scoped so unrelated staged changes are NOT swept in. Both old and
+          # new rels are named so git commits the deletion + addition atomically.
+          try:
+            sha = _git_commit_paths_strict(self.root, [rel_old, rel_new], commit_message)
+          except VaultFSError as exc:
+            raise VaultFSError(f"{exc} — the move of {label} is staged but NOT committed") from exc
+        last_problems = _move_postcondition_problems(self.root, old_path, new_path, rel_old, rel_new)
+        if not last_problems:
+          if sha is None:
+            sha = _git_step(self.root, ["rev-parse", "HEAD"], what="git rev-parse HEAD").stdout.strip() or None
+          return new_path, sha, commit_message
+      raise VaultFSError(
+        f"move of {label} did not take effect after {_DELETE_ATTEMPTS} attempts: {'; '.join(last_problems)}. "
+        "Another process may be writing these notes."
       )
-      return new_path, git_sha, commit_message
-    else:
-      old_path.rename(new_path)
-    return new_path, None, None
 
   # -- Asset relocation (drain 2026-08-14-0250) -----------------------------
 
@@ -2088,11 +2099,15 @@ _VAULT_DELETE_LOCKS: dict[str, threading.Lock] = {}
 _VAULT_DELETE_LOCKS_GUARD = threading.Lock()
 
 
-def _vault_delete_lock(root: Path) -> threading.Lock:
-  """The one lock serializing deletes in the vault at `root` (this process)."""
+def _vault_git_write_lock(root: Path) -> threading.Lock:
+  """The one lock serializing git-writing sequences (delete, rename, move) in the vault at `root` (this process)."""
   key = str(root.resolve())
   with _VAULT_DELETE_LOCKS_GUARD:
     return _VAULT_DELETE_LOCKS.setdefault(key, threading.Lock())
+
+
+#: Kept for the delete path and its tests — the SAME lock object (a rename and a delete share one git index).
+_vault_delete_lock = _vault_git_write_lock
 
 
 def _is_git_lock_error(text: str) -> bool:
@@ -2139,6 +2154,37 @@ def _git_commit_paths_strict(root: Path, rels: list[Path], message: str) -> str:
   if not sha:
     raise VaultFSError("git rev-parse HEAD returned nothing after the delete commit")
   return sha
+
+
+def _move_postcondition_problems(
+  root: Path, old_path: Path, new_path: Path, rel_old: Path | None, rel_new: Path | None,
+) -> list[str]:
+  """What is not yet true of a completed move: old absent and new present in the working tree, and (git) old out of / new in the
+  index and HEAD, with `git status` clean for both. Empty list = the move took effect. Probes the repo, never an exit code."""
+  problems: list[str] = []
+  if old_path.exists():
+    problems.append(f"the old path {old_path.name!r} is still present in the working tree")
+  if not new_path.exists():
+    problems.append(f"the new path {new_path.name!r} is not present in the working tree")
+  if rel_old is None or rel_new is None:
+    return problems
+  probe = lambda *a: subprocess.run(  # noqa: E731
+    ["git", "-C", str(root), *a], capture_output=True, text=True, check=False,
+  )
+  if probe("ls-files", "--error-unmatch", "--", str(rel_old)).returncode == 0:
+    problems.append("the old path is still in the git index")
+  if probe("ls-files", "--error-unmatch", "--", str(rel_new)).returncode != 0:
+    problems.append("the new path is not in the git index")
+  old_tree = probe("ls-tree", "HEAD", "--", str(rel_old))
+  if old_tree.returncode == 0 and old_tree.stdout.strip():
+    problems.append("the old path is still in HEAD (the move commit did not remove it)")
+  new_tree = probe("ls-tree", "HEAD", "--", str(rel_new))
+  if new_tree.returncode == 0 and not new_tree.stdout.strip():
+    problems.append("the new path is not in HEAD (the move was not committed)")
+  status = probe("status", "--porcelain", "--", str(rel_old), str(rel_new))
+  if status.returncode == 0 and status.stdout.strip():
+    problems.append(f"git status still reports {status.stdout.strip()!r}")
+  return problems
 
 
 def _delete_postcondition_problems(
