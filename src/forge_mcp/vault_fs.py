@@ -1645,12 +1645,17 @@ class VaultFS:
           # unlink; git-status will then show "?? <rel>" cleaned.
           path.unlink(missing_ok=True)
         else:
-          # File is tracked in HEAD. Reset any working-tree drift first.
-          _git_step(
-            self.root, ["checkout", "HEAD", "--", str(rel)],
-            what=f"git checkout HEAD for {note_id!r} (pre-delete reset)",
-          )
-          _git_step(self.root, ["rm", "--", str(rel)], what=f"git rm for {note_id!r}")
+          # File is tracked in HEAD. Reset any working-tree drift first — and VERIFY it held (drain 2026-10-19-0900 §2).
+          _checkout_head_verified(self.root, rel, note_id)
+          try:
+            _git_step(self.root, ["rm", "--", str(rel)], what=f"git rm for {note_id!r}")
+          except VaultFSError as exc:
+            if not _is_local_modifications_error(str(exc)):
+              raise
+            # Something re-wrote the path AFTER the verified checkout and before `git rm` (CCQA 2026-10-18 step 11: the plugin's write-back).
+            # Reset that same path again, verify, and only then force — `-f` is never reached for a path whose checkout did not verify.
+            _checkout_head_verified(self.root, rel, note_id)
+            _git_step(self.root, ["rm", "-f", "--", str(rel)], what=f"git rm -f for {note_id!r} (after a verified second checkout)")
           if path.exists():
             # Re-created between `git rm` and the commit by another writer.
             # `git commit -- <rel>` reads the WORKING TREE for its pathspec,
@@ -2139,6 +2144,33 @@ def _git_step(
       _sleep(_GIT_LOCK_BACKOFF_SECONDS[attempt])
       _clear_stale_git_lock(root)
   raise AssertionError("unreachable")  # pragma: no cover
+
+
+#: Checkout attempts per reset before the delete gives up (the first, plus one retry).
+_DELETE_RESET_ATTEMPTS = 2
+
+
+def _is_local_modifications_error(detail: str) -> bool:
+  low = detail.lower()
+  return "local modifications" in low or "changes staged in the index" in low
+
+
+def _checkout_head_verified(root: Path, rel: Path, note_id: str) -> None:
+  """`git checkout HEAD -- <rel>`, then PROVE the path is clean (`git status --porcelain -- <rel>` empty). A checkout that exits 0 is not
+  proof: another writer can put the file back before the next git step. Retried at most `_DELETE_RESET_ATTEMPTS` times in all; if the
+  path still is not clean, VaultFSError — the caller must not go on to remove (or force-remove) a path it could not reset."""
+  for _ in range(_DELETE_RESET_ATTEMPTS):
+    _git_step(
+      root, ["checkout", "HEAD", "--", str(rel)],
+      what=f"git checkout HEAD for {note_id!r} (pre-delete reset)",
+    )
+    status = _git_step(root, ["status", "--porcelain", "--", str(rel)], what=f"git status for {note_id!r}")
+    if status.stdout.strip() == "":
+      return
+  raise VaultFSError(
+    f"git checkout HEAD for {note_id!r} did not leave the path clean after {_DELETE_RESET_ATTEMPTS} attempts — "
+    "another process is writing this note; nothing was deleted."
+  )
 
 
 def _git_commit_paths_strict(root: Path, rels: list[Path], message: str) -> str:
