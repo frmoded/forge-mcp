@@ -1369,12 +1369,12 @@ class VaultFS:
             head = _git_step(self.root, ["rev-parse", "HEAD"], what="git rev-parse HEAD").stdout.strip()
             return new_path, head or None, commit_message
         if not new_path.exists():
-          # Source is tracked in HEAD. Reset any working-tree drift first, then move.
-          _git_step(
-            self.root, ["checkout", "HEAD", "--", str(rel_old)],
-            what=f"git checkout HEAD for {label} (pre-move reset)",
-          )
+          # Source is tracked in HEAD. Reset any working-tree drift first — and VERIFY it held (drain 2026-10-19-1530), then move.
+          _checkout_head_verified(self.root, rel_old, label, what="pre-move reset")
           _git_step(self.root, ["mv", str(rel_old), str(rel_new)], what=f"git mv for {label}")
+          # `git mv` carries the WORKING-TREE content: a writer that re-wrote the source after the verified checkout would have its content
+          # promoted into the new path and committed. The moved file must be HEAD's blob of the old path, byte for byte.
+          _restore_moved_blob(self.root, rel_old, rel_new, label)
         if new_path.exists() and old_path.exists():
           # The OLD path was re-created by another writer after the move landed. A path-scoped commit that names it reads the
           # WORKING TREE for it and would record the resurrection, so take it out first. (Never when the new path is missing: then
@@ -2155,14 +2155,33 @@ def _is_local_modifications_error(detail: str) -> bool:
   return "local modifications" in low or "changes staged in the index" in low
 
 
-def _checkout_head_verified(root: Path, rel: Path, note_id: str) -> None:
+def _restore_moved_blob(root: Path, rel_old: Path, rel_new: Path, label: str) -> None:
+  """After `git mv`: prove the file at <rel_new> is HEAD's blob of <rel_old> (`git hash-object` vs `git rev-parse HEAD:<old>`); if another writer
+  got to it first, write the blob back and re-stage (bounded to `_DELETE_RESET_ATTEMPTS`). Else VaultFSError — the caller never commits it."""
+  expected = _git_step(root, ["rev-parse", f"HEAD:{rel_old}"], what=f"git rev-parse HEAD:{rel_old}").stdout.strip()
+  for _ in range(_DELETE_RESET_ATTEMPTS):
+    actual = _git_step(root, ["hash-object", "--", str(rel_new)], what=f"git hash-object for {label}").stdout.strip()
+    if actual == expected:
+      return
+    blob = subprocess.run(["git", "-C", str(root), "cat-file", "blob", expected], capture_output=True, check=True).stdout
+    (root / rel_new).write_bytes(blob)
+    _git_step(root, ["add", "--", str(rel_new)], what=f"git add for {label} (restored from HEAD)")
+  actual = _git_step(root, ["hash-object", "--", str(rel_new)], what=f"git hash-object for {label}").stdout.strip()
+  if actual != expected:
+    raise VaultFSError(
+      f"the moved file for {label} would not stay as HEAD has it after {_DELETE_RESET_ATTEMPTS} attempts — "
+      "another process is writing this note; nothing was committed."
+    )
+
+
+def _checkout_head_verified(root: Path, rel: Path, note_id: str, *, what: str = "pre-delete reset") -> None:
   """`git checkout HEAD -- <rel>`, then PROVE the path is clean (`git status --porcelain -- <rel>` empty). A checkout that exits 0 is not
   proof: another writer can put the file back before the next git step. Retried at most `_DELETE_RESET_ATTEMPTS` times in all; if the
   path still is not clean, VaultFSError — the caller must not go on to remove (or force-remove) a path it could not reset."""
   for _ in range(_DELETE_RESET_ATTEMPTS):
     _git_step(
       root, ["checkout", "HEAD", "--", str(rel)],
-      what=f"git checkout HEAD for {note_id!r} (pre-delete reset)",
+      what=f"git checkout HEAD for {note_id!r} ({what})",
     )
     status = _git_step(root, ["status", "--porcelain", "--", str(rel)], what=f"git status for {note_id!r}")
     if status.stdout.strip() == "":
